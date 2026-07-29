@@ -1,0 +1,165 @@
+syntax = "proto3";
+
+package relay.v1;
+
+option go_package = "github.com/akshajnad/relay/gen/relay/v1;relayv1";
+
+// JobService is the client-facing API: submit work and observe it.
+service JobService {
+  rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
+  rpc GetJob(GetJobRequest) returns (GetJobResponse);
+}
+
+// WorkerService is the worker-facing API: membership, liveness, and the
+// lease lifecycle (acquire -> complete | fail).
+service WorkerService {
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  // AcquireJob is a long-poll: it returns as soon as a job is ready, or with
+  // has_job=false once the poll timeout elapses.
+  rpc AcquireJob(AcquireJobRequest) returns (AcquireJobResponse);
+  rpc CompleteJob(CompleteJobRequest) returns (CompleteJobResponse);
+  rpc FailJob(FailJobRequest) returns (FailJobResponse);
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+}
+
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  JOB_STATUS_PENDING = 1;
+  JOB_STATUS_LEASED = 2;
+  JOB_STATUS_SUCCEEDED = 3;
+  // FAILED: terminal, non-retryable failure reported by a worker.
+  JOB_STATUS_FAILED = 4;
+  // DEAD: exhausted max_attempts; the job is in the dead-letter set.
+  JOB_STATUS_DEAD = 5;
+}
+
+message Job {
+  string id = 1;
+  string type = 2;
+  bytes payload = 3;
+  string idempotency_key = 4;
+  JobStatus status = 5;
+  int32 attempts = 6;
+  int32 max_attempts = 7;
+  string lease_owner = 8;
+  int64 lease_expires_at_ms = 9;
+  int64 lease_token = 10;
+  int64 created_at_ms = 11;
+  int64 enqueued_at_ms = 12;
+  int64 leased_at_ms = 13;
+  int64 finished_at_ms = 14;
+  string last_error = 15;
+  bytes result = 16;
+}
+
+// JobEvent is one state transition, appended atomically by the Lua script
+// that performed it. Timestamps are Redis server time.
+message JobEvent {
+  int64 at_ms = 1;
+  string kind = 2;  // SUBMITTED, LEASED, SUCCEEDED, RETRY, FAILED, DEAD, REQUEUED, RELEASED
+  string worker_id = 3;
+  int64 lease_token = 4;
+  string detail = 5;
+}
+
+message SubmitJobRequest {
+  string type = 1;
+  bytes payload = 2;
+  string idempotency_key = 3;
+  int32 max_attempts = 4;  // 0 = server default
+}
+
+message SubmitJobResponse {
+  string job_id = 1;
+  // duplicate is true when the idempotency key already mapped to a job.
+  bool duplicate = 2;
+}
+
+message GetJobRequest {
+  string job_id = 1;
+}
+
+message GetJobResponse {
+  Job job = 1;
+  repeated JobEvent history = 2;
+}
+
+message RegisterWorkerRequest {
+  string hostname = 1;
+  int32 concurrency = 2;
+}
+
+message RegisterWorkerResponse {
+  string worker_id = 1;
+  int64 heartbeat_interval_ms = 2;
+}
+
+message HeldLease {
+  string job_id = 1;
+  int64 lease_token = 2;
+}
+
+message HeartbeatRequest {
+  string worker_id = 1;
+  // held lists the leases the worker is actually running. Only these are
+  // renewed; a lease the worker never learned about is left to expire.
+  repeated HeldLease held = 2;
+}
+
+message HeartbeatResponse {
+  // lost lists held leases that could not be renewed because they were
+  // reassigned or finished. Results for these will be rejected.
+  repeated HeldLease lost = 1;
+}
+
+message AcquireJobRequest {
+  string worker_id = 1;
+}
+
+message AcquireJobResponse {
+  bool has_job = 1;
+  Job job = 2;
+}
+
+message CompleteJobRequest {
+  string job_id = 1;
+  string worker_id = 2;
+  int64 lease_token = 3;
+  bytes result = 4;
+}
+
+message CompleteJobResponse {
+  // already_completed is true when this exact lease had already completed
+  // the job (a retried RPC); the stored result was not rewritten.
+  bool already_completed = 1;
+}
+
+message FailJobRequest {
+  string job_id = 1;
+  string worker_id = 2;
+  int64 lease_token = 3;
+  string error = 4;
+  bool retryable = 5;
+}
+
+message FailJobResponse {
+  JobStatus status = 1;
+  int64 retry_in_ms = 2;
+}
+
+message ListWorkersRequest {}
+
+message Worker {
+  string id = 1;
+  string hostname = 2;
+  int32 concurrency = 3;
+  string state = 4;  // ALIVE | DEAD
+  int64 registered_at_ms = 5;
+  int64 last_heartbeat_ms = 6;
+  int32 active_jobs = 7;
+}
+
+message ListWorkersResponse {
+  repeated Worker workers = 1;
+}
