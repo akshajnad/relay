@@ -37,7 +37,7 @@ func (c *Coordinator) RunLiveness(ctx context.Context) {
 }
 
 func (c *Coordinator) detectDeadWorkers(ctx context.Context) {
-	sctx, cancel := context.WithTimeout(ctx, c.cfg.RedisTimeout)
+	sctx, cancel := context.WithTimeout(ctx, c.cfg.StoreTimeout)
 	defer cancel()
 	r, workers, err := c.store.ExpireWorkers(sctx, c.cfg.DeadAfter)
 	if err != nil {
@@ -56,7 +56,7 @@ func (c *Coordinator) detectDeadWorkers(ctx context.Context) {
 }
 
 func (c *Coordinator) reapExpiredLeases(ctx context.Context) {
-	sctx, cancel := context.WithTimeout(ctx, c.cfg.RedisTimeout)
+	sctx, cancel := context.WithTimeout(ctx, c.cfg.StoreTimeout)
 	defer cancel()
 	r, err := c.store.ReapExpired(sctx)
 	if err != nil {

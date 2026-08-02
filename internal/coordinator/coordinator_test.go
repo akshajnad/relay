@@ -13,6 +13,7 @@ import (
 	"github.com/akshajnad/relay/internal/metrics"
 	"github.com/akshajnad/relay/internal/redistest"
 	"github.com/akshajnad/relay/internal/store"
+	redisstore "github.com/akshajnad/relay/internal/store/redis"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -36,7 +37,7 @@ func start(t *testing.T, mutCfg func(*Config), mutStore func(*store.Config)) *ha
 	if mutStore != nil {
 		mutStore(&scfg)
 	}
-	st := store.New(rdb, scfg)
+	st := redisstore.New(rdb, scfg)
 	if err := st.LoadScripts(context.Background()); err != nil {
 		t.Fatal(err)
 	}

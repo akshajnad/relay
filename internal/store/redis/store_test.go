@@ -1,4 +1,4 @@
-package store
+package redisstore
 
 import (
 	"context"
@@ -9,15 +9,16 @@ import (
 	"time"
 
 	"github.com/akshajnad/relay/internal/redistest"
+	"github.com/akshajnad/relay/internal/store"
 	"github.com/redis/go-redis/v9"
 )
 
 func TestMain(m *testing.M) { redistest.Main(m) }
 
-func newStore(t *testing.T, mut func(*Config)) (*Store, *redis.Client) {
+func newStore(t *testing.T, mut func(*store.Config)) (*Store, *redis.Client) {
 	t.Helper()
 	rdb := redistest.Client(t)
-	cfg := DefaultConfig()
+	cfg := store.DefaultConfig()
 	if mut != nil {
 		mut(&cfg)
 	}
@@ -28,7 +29,7 @@ func newStore(t *testing.T, mut func(*Config)) (*Store, *redis.Client) {
 	return s, rdb
 }
 
-func mustSubmit(t *testing.T, s *Store, p SubmitParams) string {
+func mustSubmit(t *testing.T, s *Store, p store.SubmitParams) string {
 	t.Helper()
 	if p.Type == "" {
 		p.Type = "noop"
@@ -52,7 +53,7 @@ func mustRegister(t *testing.T, s *Store, host string) string {
 	return id
 }
 
-func mustAcquire(t *testing.T, s *Store, worker string) *Job {
+func mustAcquire(t *testing.T, s *Store, worker string) *store.Job {
 	t.Helper()
 	a, err := s.Acquire(context.Background(), worker)
 	if err != nil {
@@ -64,7 +65,7 @@ func mustAcquire(t *testing.T, s *Store, worker string) *Job {
 	return a.Job
 }
 
-func mustGet(t *testing.T, s *Store, id string) (*Job, []Event) {
+func mustGet(t *testing.T, s *Store, id string) (*store.Job, []store.Event) {
 	t.Helper()
 	j, ev, err := s.Get(context.Background(), id)
 	if err != nil {
@@ -85,7 +86,7 @@ func eventually(t *testing.T, timeout time.Duration, what string, cond func() bo
 	}
 }
 
-func kinds(ev []Event) []string {
+func kinds(ev []store.Event) []string {
 	out := make([]string, len(ev))
 	for i, e := range ev {
 		out[i] = e.Kind
@@ -93,7 +94,7 @@ func kinds(ev []Event) []string {
 	return out
 }
 
-func countKind(ev []Event, kind string) int {
+func countKind(ev []store.Event, kind string) int {
 	n := 0
 	for _, e := range ev {
 		if e.Kind == kind {
@@ -103,20 +104,20 @@ func countKind(ev []Event, kind string) int {
 	return n
 }
 
-func asStale(t *testing.T, err error) *StaleLeaseError {
+func asStale(t *testing.T, err error) *store.StaleLeaseError {
 	t.Helper()
-	var se *StaleLeaseError
+	var se *store.StaleLeaseError
 	if !errors.As(err, &se) {
-		t.Fatalf("expected StaleLeaseError, got %v", err)
+		t.Fatalf("expected store.StaleLeaseError, got %v", err)
 	}
 	return se
 }
 
 func TestSubmitAndGet(t *testing.T) {
 	s, _ := newStore(t, nil)
-	id := mustSubmit(t, s, SubmitParams{Type: "sleep", Payload: []byte{0, 1, 2, 255}, MaxAttempts: 4})
+	id := mustSubmit(t, s, store.SubmitParams{Type: "sleep", Payload: []byte{0, 1, 2, 255}, MaxAttempts: 4})
 	j, ev := mustGet(t, s, id)
-	if j.Status != StatusPending || j.Type != "sleep" || j.MaxAttempts != 4 || j.Attempts != 0 {
+	if j.Status != store.StatusPending || j.Type != "sleep" || j.MaxAttempts != 4 || j.Attempts != 0 {
 		t.Fatalf("unexpected job %+v", j)
 	}
 	if string(j.Payload) != string([]byte{0, 1, 2, 255}) {
@@ -128,12 +129,12 @@ func TestSubmitAndGet(t *testing.T) {
 	if len(ev) != 1 || ev[0].Kind != "SUBMITTED" {
 		t.Fatalf("history = %v", kinds(ev))
 	}
-	if _, _, err := s.Get(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Get(missing) = %v, want ErrNotFound", err)
+	if _, _, err := s.Get(context.Background(), "missing"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Get(missing) = %v, want store.ErrNotFound", err)
 	}
 
-	id2 := mustSubmit(t, s, SubmitParams{})
-	if j2, _ := mustGet(t, s, id2); j2.MaxAttempts != DefaultConfig().DefaultMaxAttempts {
+	id2 := mustSubmit(t, s, store.SubmitParams{})
+	if j2, _ := mustGet(t, s, id2); j2.MaxAttempts != store.DefaultConfig().DefaultMaxAttempts {
 		t.Fatalf("default max attempts not applied: %d", j2.MaxAttempts)
 	}
 }
@@ -141,12 +142,12 @@ func TestSubmitAndGet(t *testing.T) {
 func TestSubmitIdempotent(t *testing.T) {
 	s, rdb := newStore(t, nil)
 	ctx := context.Background()
-	id := mustSubmit(t, s, SubmitParams{IdempotencyKey: "k1"})
-	again, dup, err := s.Submit(ctx, SubmitParams{Type: "noop", IdempotencyKey: "k1"})
+	id := mustSubmit(t, s, store.SubmitParams{IdempotencyKey: "k1"})
+	again, dup, err := s.Submit(ctx, store.SubmitParams{Type: "noop", IdempotencyKey: "k1"})
 	if err != nil || !dup || again != id {
 		t.Fatalf("resubmit = (%s, %v, %v), want (%s, true, nil)", again, dup, err, id)
 	}
-	if other := mustSubmit(t, s, SubmitParams{IdempotencyKey: "k2"}); other == id {
+	if other := mustSubmit(t, s, store.SubmitParams{IdempotencyKey: "k2"}); other == id {
 		t.Fatal("different keys produced the same job")
 	}
 
@@ -160,7 +161,7 @@ func TestSubmitIdempotent(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			var err error
-			ids[i], dups[i], err = s.Submit(ctx, SubmitParams{Type: "noop", IdempotencyKey: "race"})
+			ids[i], dups[i], err = s.Submit(ctx, store.SubmitParams{Type: "noop", IdempotencyKey: "race"})
 			if err != nil {
 				t.Error(err)
 			}
@@ -194,7 +195,7 @@ func TestAcquire(t *testing.T) {
 		t.Fatalf("empty acquire = %+v, %v", a, err)
 	}
 
-	ids := []string{mustSubmit(t, s, SubmitParams{}), mustSubmit(t, s, SubmitParams{}), mustSubmit(t, s, SubmitParams{})}
+	ids := []string{mustSubmit(t, s, store.SubmitParams{}), mustSubmit(t, s, store.SubmitParams{}), mustSubmit(t, s, store.SubmitParams{})}
 	for i, want := range ids {
 		a, err := s.Acquire(ctx, w)
 		if err != nil {
@@ -204,11 +205,11 @@ func TestAcquire(t *testing.T) {
 		if j == nil || j.ID != want {
 			t.Fatalf("acquire %d got %+v, want job %s (FIFO)", i, j, want)
 		}
-		if j.Status != StatusLeased || j.LeaseOwner != w || j.LeaseToken != 1 || j.Attempts != 1 {
+		if j.Status != store.StatusLeased || j.LeaseOwner != w || j.LeaseToken != 1 || j.Attempts != 1 {
 			t.Fatalf("lease fields wrong: %+v", j)
 		}
-		if j.LeasedAt != a.RedisNowMs || j.LeaseExpiresAt != a.RedisNowMs+s.cfg.LeaseDuration.Milliseconds() {
-			t.Fatalf("lease times wrong: %+v now=%d", j, a.RedisNowMs)
+		if j.LeasedAt != a.StoreNowMs || j.LeaseExpiresAt != a.StoreNowMs+s.cfg.LeaseDuration.Milliseconds() {
+			t.Fatalf("lease times wrong: %+v now=%d", j, a.StoreNowMs)
 		}
 		if a.EligibleAtMs != j.EnqueuedAt {
 			t.Fatalf("eligible %d != enqueued %d", a.EligibleAtMs, j.EnqueuedAt)
@@ -230,8 +231,8 @@ func TestAcquire(t *testing.T) {
 
 func TestAcquireUnknownWorker(t *testing.T) {
 	s, _ := newStore(t, nil)
-	mustSubmit(t, s, SubmitParams{})
-	if _, err := s.Acquire(context.Background(), "w-nobody"); !errors.Is(err, ErrWorkerNotAlive) {
+	mustSubmit(t, s, store.SubmitParams{})
+	if _, err := s.Acquire(context.Background(), "w-nobody"); !errors.Is(err, store.ErrWorkerNotAlive) {
 		t.Fatalf("acquire by unknown worker = %v", err)
 	}
 }
@@ -240,11 +241,11 @@ func TestHeartbeatRenewsOnlyReportedLeases(t *testing.T) {
 	s, _ := newStore(t, nil)
 	ctx := context.Background()
 	w := mustRegister(t, s, "host-a")
-	id1, id2 := mustSubmit(t, s, SubmitParams{}), mustSubmit(t, s, SubmitParams{})
+	id1, id2 := mustSubmit(t, s, store.SubmitParams{}), mustSubmit(t, s, store.SubmitParams{})
 	j1, j2 := mustAcquire(t, s, w), mustAcquire(t, s, w)
 
 	eventually(t, 2*time.Second, "lease renewal", func() bool {
-		lost, err := s.Heartbeat(ctx, w, []Lease{{JobID: id1, Token: j1.LeaseToken}})
+		lost, err := s.Renew(ctx, w, []store.Lease{{JobID: id1, Token: j1.LeaseToken}})
 		if err != nil || len(lost) != 0 {
 			t.Fatalf("heartbeat = %v, %v", lost, err)
 		}
@@ -255,14 +256,14 @@ func TestHeartbeatRenewsOnlyReportedLeases(t *testing.T) {
 		t.Fatal("unreported lease was renewed")
 	}
 
-	lost, err := s.Heartbeat(ctx, w, []Lease{{JobID: id2, Token: 99}, {JobID: "missing", Token: 1}})
+	lost, err := s.Renew(ctx, w, []store.Lease{{JobID: id2, Token: 99}, {JobID: "missing", Token: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lost) != 2 || lost[0] != (Lease{JobID: id2, Token: 99}) || lost[1].JobID != "missing" {
+	if len(lost) != 2 || lost[0] != (store.Lease{JobID: id2, Token: 99}) || lost[1].JobID != "missing" {
 		t.Fatalf("lost = %+v", lost)
 	}
-	if _, err := s.Heartbeat(ctx, "w-nobody", nil); !errors.Is(err, ErrWorkerNotAlive) {
+	if _, err := s.Renew(ctx, "w-nobody", nil); !errors.Is(err, store.ErrWorkerNotAlive) {
 		t.Fatalf("heartbeat by unknown worker = %v", err)
 	}
 }
@@ -271,12 +272,12 @@ func TestCompleteFencing(t *testing.T) {
 	s, rdb := newStore(t, nil)
 	ctx := context.Background()
 	a, b := mustRegister(t, s, "host-a"), mustRegister(t, s, "host-b")
-	id := mustSubmit(t, s, SubmitParams{})
+	id := mustSubmit(t, s, store.SubmitParams{})
 	j := mustAcquire(t, s, a)
 
 	asStale(t, func() error { _, err := s.Complete(ctx, id, a, j.LeaseToken+1, []byte("x")); return err }())
 	asStale(t, func() error { _, err := s.Complete(ctx, id, b, j.LeaseToken, []byte("x")); return err }())
-	if _, err := s.Complete(ctx, "missing", a, 1, nil); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Complete(ctx, "missing", a, 1, nil); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("complete missing = %v", err)
 	}
 
@@ -289,7 +290,7 @@ func TestCompleteFencing(t *testing.T) {
 		t.Fatalf("retried complete = %v, %v; want already", already, err)
 	}
 	got, ev := mustGet(t, s, id)
-	if got.Status != StatusSucceeded || string(got.Result) != "first" || got.FinishedAt == 0 {
+	if got.Status != store.StatusSucceeded || string(got.Result) != "first" || got.FinishedAt == 0 {
 		t.Fatalf("job after complete = %+v", got)
 	}
 	if countKind(ev, "SUCCEEDED") != 1 {
@@ -302,7 +303,7 @@ func TestCompleteFencing(t *testing.T) {
 		t.Fatal("completed job still in worker's job set")
 	}
 	// A failure report on a completed lease is not a new transition.
-	if out, err := s.Fail(ctx, id, a, j.LeaseToken, "late", true); err != nil || !out.Already || out.Status != StatusSucceeded {
+	if out, err := s.Fail(ctx, id, a, j.LeaseToken, "late", true); err != nil || !out.Already || out.Status != store.StatusSucceeded {
 		t.Fatalf("fail after complete = %+v, %v", out, err)
 	}
 }
@@ -311,10 +312,10 @@ func TestCompleteFencing(t *testing.T) {
 // A's lease expires and is reaped, B gets the job, and A's late result must
 // not land, before or after B completes.
 func TestZombieCompletionRejected(t *testing.T) {
-	s, _ := newStore(t, func(c *Config) { c.LeaseDuration = 50 * time.Millisecond })
+	s, _ := newStore(t, func(c *store.Config) { c.LeaseDuration = 50 * time.Millisecond })
 	ctx := context.Background()
 	a, b := mustRegister(t, s, "host-a"), mustRegister(t, s, "host-b")
-	id := mustSubmit(t, s, SubmitParams{MaxAttempts: 3})
+	id := mustSubmit(t, s, store.SubmitParams{MaxAttempts: 3})
 	ja := mustAcquire(t, s, a)
 
 	eventually(t, 2*time.Second, "lease to be reaped", func() bool {
@@ -330,7 +331,7 @@ func TestZombieCompletionRejected(t *testing.T) {
 	}
 
 	se := asStale(t, func() error { _, err := s.Complete(ctx, id, a, ja.LeaseToken, []byte("zombie")); return err }())
-	if se.CurrentOwner != b || se.CurrentToken != jb.LeaseToken || se.Status != StatusLeased {
+	if se.CurrentOwner != b || se.CurrentToken != jb.LeaseToken || se.Status != store.StatusLeased {
 		t.Fatalf("stale error = %+v", se)
 	}
 	if _, err := s.Complete(ctx, id, b, jb.LeaseToken, []byte("b")); err != nil {
@@ -340,7 +341,7 @@ func TestZombieCompletionRejected(t *testing.T) {
 	asStale(t, func() error { _, err := s.Fail(ctx, id, a, ja.LeaseToken, "zombie", true); return err }())
 
 	got, ev := mustGet(t, s, id)
-	if got.Status != StatusSucceeded || string(got.Result) != "b" || got.LeaseOwner != b {
+	if got.Status != store.StatusSucceeded || string(got.Result) != "b" || got.LeaseOwner != b {
 		t.Fatalf("job = %+v", got)
 	}
 	want := []string{"SUBMITTED", "LEASED", "REQUEUED", "LEASED", "SUCCEEDED"}
@@ -350,10 +351,10 @@ func TestZombieCompletionRejected(t *testing.T) {
 }
 
 func TestFailRetryWithBackoff(t *testing.T) {
-	s, rdb := newStore(t, func(c *Config) { c.BackoffBase = 200 * time.Millisecond })
+	s, rdb := newStore(t, func(c *store.Config) { c.BackoffBase = 200 * time.Millisecond })
 	ctx := context.Background()
 	w := mustRegister(t, s, "host-a")
-	id := mustSubmit(t, s, SubmitParams{MaxAttempts: 3})
+	id := mustSubmit(t, s, store.SubmitParams{MaxAttempts: 3})
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		j := mustAcquire(t, s, w)
@@ -366,11 +367,11 @@ func TestFailRetryWithBackoff(t *testing.T) {
 		}
 		// Equal jitter: delay is in [d/2, d] for d = base * 2^(attempt-1).
 		d := s.cfg.BackoffBase << (attempt - 1)
-		if out.Status != StatusPending || out.RetryIn < d/2 || out.RetryIn > d {
+		if out.Status != store.StatusPending || out.RetryIn < d/2 || out.RetryIn > d {
 			t.Fatalf("attempt %d: outcome %+v, want retry in [%v, %v]", attempt, out, d/2, d)
 		}
 		failed, _ := mustGet(t, s, id)
-		if failed.LastError != fmt.Sprintf("boom %d", attempt) || failed.Status != StatusPending {
+		if failed.LastError != fmt.Sprintf("boom %d", attempt) || failed.Status != store.StatusPending {
 			t.Fatalf("after fail: %+v", failed)
 		}
 		if score := rdb.ZScore(ctx, Prefix+"ready", id).Val(); int64(score) != failed.EnqueuedAt {
@@ -382,7 +383,7 @@ func TestFailRetryWithBackoff(t *testing.T) {
 		if err != nil || a.Job != nil || a.NextEligibleIn <= 0 || a.NextEligibleIn > d {
 			t.Fatalf("acquire during backoff = %+v, %v", a, err)
 		}
-		var next *Job
+		var next *store.Job
 		eventually(t, 3*time.Second, "job to become eligible", func() bool {
 			a, err := s.Acquire(ctx, w)
 			if err != nil {
@@ -402,31 +403,31 @@ func TestFailRetryWithBackoff(t *testing.T) {
 }
 
 func TestFailExhaustedGoesDead(t *testing.T) {
-	s, rdb := newStore(t, func(c *Config) { c.BackoffBase = time.Millisecond })
+	s, rdb := newStore(t, func(c *store.Config) { c.BackoffBase = time.Millisecond })
 	ctx := context.Background()
 	w := mustRegister(t, s, "host-a")
-	id := mustSubmit(t, s, SubmitParams{MaxAttempts: 2})
+	id := mustSubmit(t, s, store.SubmitParams{MaxAttempts: 2})
 
 	j := mustAcquire(t, s, w)
-	if out, _ := s.Fail(ctx, id, w, j.LeaseToken, "e1", true); out.Status != StatusPending {
+	if out, _ := s.Fail(ctx, id, w, j.LeaseToken, "e1", true); out.Status != store.StatusPending {
 		t.Fatalf("first failure: %+v", out)
 	}
-	var j2 *Job
+	var j2 *store.Job
 	eventually(t, 2*time.Second, "retry", func() bool {
 		a, _ := s.Acquire(ctx, w)
 		j2 = a.Job
 		return j2 != nil
 	})
 	out, err := s.Fail(ctx, id, w, j2.LeaseToken, "e2", true)
-	if err != nil || out.Status != StatusDead {
+	if err != nil || out.Status != store.StatusDead {
 		t.Fatalf("second failure = %+v, %v", out, err)
 	}
 	// A retried report of the same failure is recognized, not re-applied.
-	if out, err := s.Fail(ctx, id, w, j2.LeaseToken, "e2", true); err != nil || !out.Already || out.Status != StatusDead {
+	if out, err := s.Fail(ctx, id, w, j2.LeaseToken, "e2", true); err != nil || !out.Already || out.Status != store.StatusDead {
 		t.Fatalf("retried fail = %+v, %v", out, err)
 	}
 	got, ev := mustGet(t, s, id)
-	if got.Status != StatusDead || got.Attempts != 2 || got.LastError != "e2" || got.FinishedAt == 0 {
+	if got.Status != store.StatusDead || got.Attempts != 2 || got.LastError != "e2" || got.FinishedAt == 0 {
 		t.Fatalf("job = %+v", got)
 	}
 	if rdb.ZScore(ctx, Prefix+"dead", id).Err() != nil {
@@ -442,14 +443,14 @@ func TestFailNonRetryable(t *testing.T) {
 	s, rdb := newStore(t, nil)
 	ctx := context.Background()
 	w := mustRegister(t, s, "host-a")
-	id := mustSubmit(t, s, SubmitParams{MaxAttempts: 5})
+	id := mustSubmit(t, s, store.SubmitParams{MaxAttempts: 5})
 	j := mustAcquire(t, s, w)
 	out, err := s.Fail(ctx, id, w, j.LeaseToken, "bad input", false)
-	if err != nil || out.Status != StatusFailed {
+	if err != nil || out.Status != store.StatusFailed {
 		t.Fatalf("fail = %+v, %v", out, err)
 	}
 	got, _ := mustGet(t, s, id)
-	if got.Status != StatusFailed || got.LastError != "bad input" {
+	if got.Status != store.StatusFailed || got.LastError != "bad input" {
 		t.Fatalf("job = %+v", got)
 	}
 	if rdb.ZScore(ctx, Prefix+"dead", id).Err() != redis.Nil {
@@ -461,12 +462,12 @@ func TestFailNonRetryable(t *testing.T) {
 }
 
 func TestReapExpiredLeases(t *testing.T) {
-	s, rdb := newStore(t, func(c *Config) { c.LeaseDuration = 50 * time.Millisecond; c.ScanBatch = 2 })
+	s, rdb := newStore(t, func(c *store.Config) { c.LeaseDuration = 50 * time.Millisecond; c.ScanBatch = 2 })
 	ctx := context.Background()
 	w := mustRegister(t, s, "host-a")
 	var ids []string
 	for i := 0; i < 5; i++ {
-		ids = append(ids, mustSubmit(t, s, SubmitParams{MaxAttempts: 2}))
+		ids = append(ids, mustSubmit(t, s, store.SubmitParams{MaxAttempts: 2}))
 		mustAcquire(t, s, w)
 	}
 	// The last job is on its final attempt, so expiry kills it.
@@ -474,7 +475,7 @@ func TestReapExpiredLeases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var total RevokeResult
+	var total store.RevokeResult
 	eventually(t, 2*time.Second, "all leases reaped", func() bool {
 		r, err := s.ReapExpired(ctx)
 		if err != nil {
@@ -489,11 +490,11 @@ func TestReapExpiredLeases(t *testing.T) {
 	}
 	for _, id := range ids[:4] {
 		j, ev := mustGet(t, s, id)
-		if j.Status != StatusPending || j.Attempts != 1 || ev[len(ev)-1].Kind != "REQUEUED" {
+		if j.Status != store.StatusPending || j.Attempts != 1 || ev[len(ev)-1].Kind != "REQUEUED" {
 			t.Fatalf("job %s = %+v %v", id, j, kinds(ev))
 		}
 	}
-	if j, _ := mustGet(t, s, ids[4]); j.Status != StatusDead {
+	if j, _ := mustGet(t, s, ids[4]); j.Status != store.StatusDead {
 		t.Fatalf("exhausted job = %+v", j)
 	}
 	if rdb.ZCard(ctx, Prefix+"leases").Val() != 0 || rdb.SCard(ctx, Prefix+"worker:"+w+":jobs").Val() != 0 {
@@ -508,17 +509,17 @@ func TestExpireWorkers(t *testing.T) {
 	s, rdb := newStore(t, nil)
 	ctx := context.Background()
 	a, b := mustRegister(t, s, "host-a"), mustRegister(t, s, "host-b")
-	mustSubmit(t, s, SubmitParams{})
-	mustSubmit(t, s, SubmitParams{})
-	mustSubmit(t, s, SubmitParams{})
-	held := []*Job{mustAcquire(t, s, a), mustAcquire(t, s, a)}
+	mustSubmit(t, s, store.SubmitParams{})
+	mustSubmit(t, s, store.SubmitParams{})
+	mustSubmit(t, s, store.SubmitParams{})
+	held := []*store.Job{mustAcquire(t, s, a), mustAcquire(t, s, a)}
 	jb := mustAcquire(t, s, b)
 
 	const deadAfter = 100 * time.Millisecond
 	var expired []string
 	eventually(t, 3*time.Second, "worker a to be declared dead", func() bool {
 		// b keeps heartbeating; a has stopped.
-		if _, err := s.Heartbeat(ctx, b, []Lease{{JobID: jb.ID, Token: jb.LeaseToken}}); err != nil {
+		if _, err := s.Renew(ctx, b, []store.Lease{{JobID: jb.ID, Token: jb.LeaseToken}}); err != nil {
 			t.Fatal(err)
 		}
 		r, ws, err := s.ExpireWorkers(ctx, deadAfter)
@@ -539,17 +540,17 @@ func TestExpireWorkers(t *testing.T) {
 	}
 	for _, j := range held {
 		got, ev := mustGet(t, s, j.ID)
-		if got.Status != StatusPending || ev[len(ev)-1].Kind != "REQUEUED" {
+		if got.Status != store.StatusPending || ev[len(ev)-1].Kind != "REQUEUED" {
 			t.Fatalf("held job after worker death = %+v %v", got, kinds(ev))
 		}
 	}
-	if got, _ := mustGet(t, s, jb.ID); got.Status != StatusLeased || got.LeaseOwner != b {
+	if got, _ := mustGet(t, s, jb.ID); got.Status != store.StatusLeased || got.LeaseOwner != b {
 		t.Fatalf("live worker's job disturbed: %+v", got)
 	}
-	if _, err := s.Acquire(ctx, a); !errors.Is(err, ErrWorkerNotAlive) {
+	if _, err := s.Acquire(ctx, a); !errors.Is(err, store.ErrWorkerNotAlive) {
 		t.Fatalf("dead worker acquire = %v", err)
 	}
-	if _, err := s.Heartbeat(ctx, a, nil); !errors.Is(err, ErrWorkerNotAlive) {
+	if _, err := s.Renew(ctx, a, nil); !errors.Is(err, store.ErrWorkerNotAlive) {
 		t.Fatalf("dead worker heartbeat = %v", err)
 	}
 	if rdb.Exists(ctx, Prefix+"worker:"+a+":jobs").Val() != 0 {
@@ -576,8 +577,8 @@ func TestReleaseUndoesAttempt(t *testing.T) {
 	s, rdb := newStore(t, nil)
 	ctx := context.Background()
 	w := mustRegister(t, s, "host-a")
-	first := mustSubmit(t, s, SubmitParams{})
-	mustSubmit(t, s, SubmitParams{})
+	first := mustSubmit(t, s, store.SubmitParams{})
+	mustSubmit(t, s, store.SubmitParams{})
 	j := mustAcquire(t, s, w)
 
 	if err := s.Release(ctx, first, w, j.LeaseToken+1); err == nil {
@@ -587,7 +588,7 @@ func TestReleaseUndoesAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, ev := mustGet(t, s, first)
-	if got.Status != StatusPending || got.Attempts != 0 || ev[len(ev)-1].Kind != "RELEASED" {
+	if got.Status != store.StatusPending || got.Attempts != 0 || ev[len(ev)-1].Kind != "RELEASED" {
 		t.Fatalf("released job = %+v %v", got, kinds(ev))
 	}
 	if rdb.ZCard(ctx, Prefix+"leases").Val() != 0 {

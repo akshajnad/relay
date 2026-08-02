@@ -21,6 +21,7 @@ import (
 	"github.com/akshajnad/relay/internal/logx"
 	"github.com/akshajnad/relay/internal/metrics"
 	"github.com/akshajnad/relay/internal/store"
+	redisstore "github.com/akshajnad/relay/internal/store/redis"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -73,7 +74,7 @@ func run() error {
 
 	rdb := redis.NewClient(&redis.Options{Addr: *redisAddr, PoolSize: *redisPool})
 	defer rdb.Close()
-	st := store.New(rdb, scfg)
+	st := redisstore.New(rdb, scfg)
 	if err := waitForRedis(ctx, st, log); err != nil {
 		return err
 	}
@@ -130,7 +131,7 @@ func run() error {
 	return nil
 }
 
-func waitForRedis(ctx context.Context, st *store.Store, log *slog.Logger) error {
+func waitForRedis(ctx context.Context, st *redisstore.Store, log *slog.Logger) error {
 	backoff := 100 * time.Millisecond
 	for {
 		err := st.LoadScripts(ctx)
