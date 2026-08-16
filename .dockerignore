@@ -2,3 +2,4 @@
 bin
 bench/results
 *.test
+chaos-out

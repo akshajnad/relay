@@ -5,6 +5,8 @@
 -- are derived inside the scripts (acquire and reap only learn job ids at run
 -- time), which is fine on a standalone Redis but not Redis Cluster safe.
 
+-- FENCING (a boolean) is defined by a one-line prelude Go prepends.
+
 local PREFIX = 'relay:'
 local K_READY = PREFIX .. 'ready'
 local K_LEASES = PREFIX .. 'leases'

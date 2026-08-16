@@ -1,0 +1,94 @@
+# Chaos cluster driven by relay-chaos (cmd/relay-chaos). Not for manual use:
+# relay-chaos sets the CHAOS_* variables, picks the backend profile, and
+# injects faults with docker kill/pause/network and Toxiproxy.
+#
+# Two networks make partitions targetable:
+#   clientnet  workers, the load generator, toxiproxy, coordinators
+#   backnet    coordinator <-> store traffic (Redis, or Raft peers)
+# Workers reach coordinators only through toxiproxy, which adds latency and
+# jitter on demand.
+name: relaychaos
+
+x-relay-image: &relay-image
+  image: ${CHAOS_IMAGE:-relay:dev}
+
+x-coordinator-env: &coordinator-env
+  RELAY_LOG_LEVEL: ${RELAY_LOG_LEVEL:-info}
+  # Short timings so faults of a few seconds expire leases and declare
+  # workers dead, which is what exercises fencing.
+  RELAY_LEASE_DURATION: 4s
+  RELAY_HEARTBEAT_INTERVAL: 500ms
+  RELAY_MISSED_HEARTBEATS: "3"
+  RELAY_POLL_TIMEOUT: 2s
+  RELAY_BACKOFF_BASE: 100ms
+  RELAY_BACKOFF_MAX: 2s
+
+networks:
+  clientnet: {}
+  backnet: {}
+
+services:
+  redis:
+    profiles: [redis]
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", ""]
+    networks: [backnet]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  coordinator:
+    profiles: [redis]
+    <<: *relay-image
+    command: ["coordinator"]
+    environment:
+      <<: *coordinator-env
+      RELAY_REDIS_ADDR: redis:6379
+    networks: [clientnet, backnet]
+    ports: ["127.0.0.1::50051"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "relayctl", "--timeout", "1s", "health"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json", "-seed=${CHAOS_SEED:-1}"]
+    volumes:
+      - ./chaos/toxiproxy.json:/config/toxiproxy.json:ro
+    networks: [clientnet]
+    ports: ["127.0.0.1::8474"]
+
+  worker:
+    <<: *relay-image
+    command: ["worker"]
+    # root so the bind-mounted history directory is writable on any host.
+    user: root
+    environment:
+      RELAY_COORDINATOR: ${CHAOS_WORKER_COORDINATOR:-toxiproxy:17000}
+      RELAY_CONCURRENCY: ${CHAOS_WORKER_CONCURRENCY:-4}
+      RELAY_HISTORY_DIR: /history
+      RELAY_LOG_LEVEL: ${RELAY_LOG_LEVEL:-info}
+      RELAY_REPORT_TIMEOUT: 2m
+    volumes:
+      - ${CHAOS_HISTORY_DIR:?}:/history
+    networks: [clientnet]
+    depends_on:
+      toxiproxy:
+        condition: service_started
+
+  load:
+    profiles: [load]
+    <<: *relay-image
+    entrypoint: ["relay-chaos", "load"]
+    user: root
+    volumes:
+      - ${CHAOS_HISTORY_DIR:?}:/history
+      - ${CHAOS_OUT_DIR:?}:/out
+    networks: [clientnet]

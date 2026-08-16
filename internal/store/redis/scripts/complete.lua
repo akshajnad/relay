@@ -9,6 +9,11 @@ local status, owner, cur = f[1], f[2], f[3]
 if not status then
   return {'NOT_FOUND'}
 end
+-- Without FENCING (relay_nofence test builds only), any report on a leased
+-- job is accepted, whoever holds the lease.
+if not FENCING and status == 'LEASED' then
+  owner, cur = wid, token
+end
 if owner == wid and cur == token then
   if status == 'LEASED' then
     local now = now_ms()

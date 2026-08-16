@@ -14,9 +14,11 @@ import (
 
 	relayv1 "github.com/akshajnad/relay/gen/relay/v1"
 	"github.com/akshajnad/relay/internal/envflag"
+	"github.com/akshajnad/relay/internal/history"
 	"github.com/akshajnad/relay/internal/logx"
 	"github.com/akshajnad/relay/internal/rpc"
 	"github.com/akshajnad/relay/internal/worker"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -34,6 +36,7 @@ func run() error {
 	sleep := fs.Duration("sleep-duration", 20*time.Millisecond, "default duration for the sleep handler")
 	logLevel := fs.String("log-level", "info", "debug|info|warn|error")
 	logFormat := fs.String("log-format", "json", "json|text")
+	historyDir := fs.String("history-dir", "", "record every RPC to a JSONL history file in this directory (chaos testing)")
 	fs.IntVar(&cfg.Concurrency, "concurrency", 1, "jobs to run in parallel")
 	fs.StringVar(&cfg.Hostname, "hostname", host, "hostname reported to the coordinator")
 	fs.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "how long to drain in-flight jobs on SIGTERM")
@@ -43,7 +46,17 @@ func run() error {
 	}
 	log := logx.New(os.Stderr, *logLevel, *logFormat)
 
-	conn, err := rpc.Dial(*addr)
+	var dialOpts []grpc.DialOption
+	if *historyDir != "" {
+		rec, err := history.Open(*historyDir, "worker")
+		if err != nil {
+			return err
+		}
+		defer rec.Close()
+		dialOpts = append(dialOpts, grpc.WithChainUnaryInterceptor(history.UnaryClientInterceptor(rec)))
+		log.Info("recording history", "file", rec.Process())
+	}
+	conn, err := rpc.Dial(*addr, dialOpts...)
 	if err != nil {
 		return err
 	}

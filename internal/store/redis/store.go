@@ -34,7 +34,9 @@ func loadScript(name string) *redis.Script {
 	if err != nil {
 		panic(err)
 	}
-	return redis.NewScript(string(common) + "\n" + string(body))
+	// FENCING is off only in relay_nofence test builds (see store.FencingEnabled).
+	prelude := fmt.Sprintf("local FENCING = %v\n", store.FencingEnabled)
+	return redis.NewScript(prelude + string(common) + "\n" + string(body))
 }
 
 var (
