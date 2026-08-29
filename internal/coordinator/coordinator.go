@@ -59,21 +59,62 @@ type Coordinator struct {
 	notifier *Notifier
 	metrics  *metrics.Registry
 	log      *slog.Logger
+	// leadership is non-nil for a replicated store, where only the leader
+	// serves.
+	leadership store.Leadership
+	done       chan struct{}
 }
 
 func New(st store.Store, cfg Config, m *metrics.Registry, log *slog.Logger) *Coordinator {
-	return &Coordinator{store: st, cfg: cfg, notifier: NewNotifier(), metrics: m, log: log}
+	c := &Coordinator{store: st, cfg: cfg, notifier: NewNotifier(), metrics: m, log: log, done: make(chan struct{})}
+	if l, ok := st.(store.Leadership); ok {
+		c.leadership = l
+		go c.watchLeadership()
+	}
+	return c
 }
 
-// Register attaches JobService and WorkerService to s.
+// watchLeadership fails every pending long-poll the moment this node stops
+// being leader: woken pollers retry the store, get NOT_LEADER, and return
+// it, so workers move to the new leader immediately rather than after
+// their poll timeout.
+func (c *Coordinator) watchLeadership() {
+	for {
+		select {
+		case <-c.done:
+			return
+		case leader := <-c.leadership.LeaderChanges():
+			c.metrics.LeaderChanges.Add(1)
+			if leader {
+				c.log.Info("this node is now the leader")
+				continue
+			}
+			c.log.Warn("lost leadership; failing pending long-polls", "pollers", c.notifier.Waiting())
+			c.notifier.WakeAll()
+		}
+	}
+}
+
+// serving reports whether this node should run leader-only work.
+func (c *Coordinator) serving() bool { return c.leadership == nil || c.leadership.IsLeader() }
+
+// Register attaches JobService, WorkerService and ClusterService to s.
 func (c *Coordinator) Register(s *grpc.Server) {
 	relayv1.RegisterJobServiceServer(s, &jobService{c: c})
 	relayv1.RegisterWorkerServiceServer(s, &workerService{c: c})
+	relayv1.RegisterClusterServiceServer(s, &clusterService{c: c})
 }
 
 // Shutdown wakes every long-poll so in-flight AcquireJob calls return and
 // the gRPC server can stop gracefully.
-func (c *Coordinator) Shutdown() { c.notifier.Close() }
+func (c *Coordinator) Shutdown() {
+	select {
+	case <-c.done:
+	default:
+		close(c.done)
+	}
+	c.notifier.Close()
+}
 
 // storeCtx detaches a store call from the RPC's cancellation. A transition
 // that has been sent (a Lua script, a Raft proposal) runs to completion in

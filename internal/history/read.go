@@ -40,8 +40,8 @@ type History struct {
 }
 
 // ReadDir loads every *.jsonl file in dir. A truncated final line (a
-// process killed mid-write) is ignored; any other malformed line is an
-// error.
+// process killed mid-write) is ignored; any other malformed line, or an op
+// that completed before it was invoked, is an error.
 func ReadDir(dir string) (*History, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 	if err != nil {
@@ -52,6 +52,12 @@ func ReadDir(dir string) (*History, error) {
 	for _, f := range files {
 		if err := h.readFile(f); err != nil {
 			return nil, err
+		}
+	}
+	for _, op := range h.Ops {
+		if op.Done != nil && op.Done.TimeNs < op.Invoke.TimeNs {
+			return nil, fmt.Errorf("%s op %d (%s) completed %dns before it was invoked: history clock is not monotonic",
+				op.Invoke.Process, op.Invoke.Op, op.Invoke.Method, op.Invoke.TimeNs-op.Done.TimeNs)
 		}
 	}
 	sort.SliceStable(h.Ops, func(i, j int) bool { return h.Ops[i].Invoke.TimeNs < h.Ops[j].Invoke.TimeNs })

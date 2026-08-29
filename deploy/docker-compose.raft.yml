@@ -1,0 +1,109 @@
+# Local Relay cluster on the Raft backend: three coordinators replicating
+# job state among themselves (no Redis), plus N workers.
+#
+#   docker compose -f deploy/docker-compose.raft.yml up -d --build --scale worker=3
+#   go run ./cmd/relayctl --coordinator n1=localhost:50051,n2=localhost:50052,n3=localhost:50053 cluster status
+#
+# Only the leader serves; followers answer NOT_LEADER with the leader's
+# address and every client (workers, relayctl, relay-bench) follows it.
+name: relay-raft
+
+x-relay-image: &relay-image
+  image: relay:dev
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+
+x-raft-env: &raft-env
+  RELAY_STORE: raft
+  RELAY_LOG_LEVEL: ${RELAY_LOG_LEVEL:-info}
+  RELAY_BOOTSTRAP: "true"
+  RELAY_PEERS: n1=coord1:7000=coord1:50051,n2=coord2:7000=coord2:50051,n3=coord3:7000=coord3:50051
+  RELAY_LEASE_DURATION: ${RELAY_LEASE_DURATION:-10s}
+  RELAY_HEARTBEAT_INTERVAL: ${RELAY_HEARTBEAT_INTERVAL:-1s}
+  RELAY_MISSED_HEARTBEATS: ${RELAY_MISSED_HEARTBEATS:-3}
+  RELAY_POLL_TIMEOUT: ${RELAY_POLL_TIMEOUT:-5s}
+  RELAY_BACKOFF_BASE: ${RELAY_BACKOFF_BASE:-200ms}
+  RELAY_RAFT_HEARTBEAT_TIMEOUT: ${RELAY_RAFT_HEARTBEAT_TIMEOUT:-1s}
+  RELAY_RAFT_ELECTION_TIMEOUT: ${RELAY_RAFT_ELECTION_TIMEOUT:-1s}
+  RELAY_RAFT_LEADER_LEASE_TIMEOUT: ${RELAY_RAFT_LEADER_LEASE_TIMEOUT:-500ms}
+
+x-coordinator: &coordinator
+  <<: *relay-image
+  command: ["coordinator"]
+  healthcheck:
+    test: ["CMD", "relayctl", "--timeout", "1s", "health"]
+    interval: 1s
+    timeout: 2s
+    retries: 30
+  stop_grace_period: 15s
+
+services:
+  coord1:
+    <<: *coordinator
+    environment:
+      <<: *raft-env
+      RELAY_NODE_ID: n1
+      RELAY_RAFT_ADVERTISE: coord1:7000
+      RELAY_GRPC_ADVERTISE: coord1:50051
+    volumes: ["coord1-data:/data"]
+    ports:
+      - "${RELAY_N1_GRPC_PUBLISH:-127.0.0.1:50051:50051}"
+      - "${RELAY_N1_METRICS_PUBLISH:-127.0.0.1:9091:9090}"
+  coord2:
+    <<: *coordinator
+    environment:
+      <<: *raft-env
+      RELAY_NODE_ID: n2
+      RELAY_RAFT_ADVERTISE: coord2:7000
+      RELAY_GRPC_ADVERTISE: coord2:50051
+    volumes: ["coord2-data:/data"]
+    ports:
+      - "${RELAY_N2_GRPC_PUBLISH:-127.0.0.1:50052:50051}"
+      - "${RELAY_N2_METRICS_PUBLISH:-127.0.0.1:9092:9090}"
+  coord3:
+    <<: *coordinator
+    environment:
+      <<: *raft-env
+      RELAY_NODE_ID: n3
+      RELAY_RAFT_ADVERTISE: coord3:7000
+      RELAY_GRPC_ADVERTISE: coord3:50051
+    volumes: ["coord3-data:/data"]
+    ports:
+      - "${RELAY_N3_GRPC_PUBLISH:-127.0.0.1:50053:50051}"
+      - "${RELAY_N3_METRICS_PUBLISH:-127.0.0.1:9093:9090}"
+
+  # A spare node that is not part of the bootstrap configuration; start it
+  # with --profile extra and join it with `relayctl cluster add`.
+  coord4:
+    <<: *coordinator
+    profiles: [extra]
+    environment:
+      <<: *raft-env
+      RELAY_BOOTSTRAP: "false"
+      RELAY_NODE_ID: n4
+      RELAY_RAFT_ADVERTISE: coord4:7000
+      RELAY_GRPC_ADVERTISE: coord4:50051
+    volumes: ["coord4-data:/data"]
+    ports:
+      - "${RELAY_N4_GRPC_PUBLISH:-127.0.0.1:50054:50051}"
+
+  worker:
+    <<: *relay-image
+    command: ["worker"]
+    environment:
+      RELAY_COORDINATOR: n1=coord1:50051,n2=coord2:50051,n3=coord3:50051
+      RELAY_CONCURRENCY: ${RELAY_WORKER_CONCURRENCY:-4}
+      RELAY_SLEEP_DURATION: ${RELAY_SLEEP_DURATION:-20ms}
+      RELAY_LOG_LEVEL: ${RELAY_LOG_LEVEL:-info}
+    depends_on:
+      coord1: {condition: service_healthy}
+      coord2: {condition: service_healthy}
+      coord3: {condition: service_healthy}
+    stop_grace_period: 35s
+
+volumes:
+  coord1-data: {}
+  coord2-data: {}
+  coord3-data: {}
+  coord4-data: {}

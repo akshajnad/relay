@@ -32,7 +32,7 @@ func run() error {
 	cfg := worker.DefaultConfig()
 	host, _ := os.Hostname()
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
-	addr := fs.String("coordinator", "localhost:50051", "coordinator gRPC address")
+	addr := fs.String("coordinator", "localhost:50051", "coordinator gRPC address, or a list id=addr,id=addr (follows the leader)")
 	sleep := fs.Duration("sleep-duration", 20*time.Millisecond, "default duration for the sleep handler")
 	logLevel := fs.String("log-level", "info", "debug|info|warn|error")
 	logFormat := fs.String("log-format", "json", "json|text")
@@ -56,7 +56,7 @@ func run() error {
 		dialOpts = append(dialOpts, grpc.WithChainUnaryInterceptor(history.UnaryClientInterceptor(rec)))
 		log.Info("recording history", "file", rec.Process())
 	}
-	conn, err := rpc.Dial(*addr, dialOpts...)
+	conn, err := rpc.DialCluster(*addr, dialOpts...)
 	if err != nil {
 		return err
 	}

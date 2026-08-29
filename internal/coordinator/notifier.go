@@ -113,6 +113,19 @@ func (n *Notifier) SignalAfter(d time.Duration) {
 	})
 }
 
+// WakeAll wakes every queued waiter without closing the notifier. A
+// coordinator that loses leadership uses it so pending long-polls retry at
+// once and are redirected, instead of waiting out their poll timeout.
+func (n *Notifier) WakeAll() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for e := n.waiters.Front(); e != nil; e = n.waiters.Front() {
+		w := n.waiters.Remove(e).(*Waiter)
+		w.signaled = true
+		w.ch <- struct{}{}
+	}
+}
+
 // Waiting reports the number of queued waiters.
 func (n *Notifier) Waiting() int {
 	n.mu.Lock()

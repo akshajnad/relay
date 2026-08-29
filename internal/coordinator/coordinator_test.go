@@ -46,6 +46,12 @@ func start(t *testing.T, mutCfg func(*Config), mutStore func(*store.Config)) *ha
 	if mutCfg != nil {
 		mutCfg(&cfg)
 	}
+	return serve(t, st, cfg)
+}
+
+// serve runs a coordinator on st behind an in-process gRPC server.
+func serve(t *testing.T, st store.Store, cfg Config) *harness {
+	t.Helper()
 	m := metrics.NewRegistry()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if testing.Verbose() {

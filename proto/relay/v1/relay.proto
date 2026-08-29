@@ -23,6 +23,15 @@ service WorkerService {
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
 }
 
+// ClusterService manages a replicated (Raft) coordinator cluster. Every
+// node answers ClusterStatus with its own view; membership changes must be
+// sent to the leader (others answer NOT_LEADER).
+service ClusterService {
+  rpc ClusterStatus(ClusterStatusRequest) returns (ClusterStatusResponse);
+  rpc AddVoter(AddVoterRequest) returns (AddVoterResponse);
+  rpc RemoveServer(RemoveServerRequest) returns (RemoveServerResponse);
+}
+
 enum JobStatus {
   JOB_STATUS_UNSPECIFIED = 0;
   JOB_STATUS_PENDING = 1;
@@ -51,6 +60,9 @@ message Job {
   int64 finished_at_ms = 14;
   string last_error = 15;
   bytes result = 16;
+  // trace_parent is the W3C traceparent of the submit, so the spans of the
+  // job's acquire, execution and completion join the submit's trace.
+  string trace_parent = 17;
 }
 
 // JobEvent is one state transition, appended atomically by the Lua script
@@ -163,3 +175,39 @@ message Worker {
 message ListWorkersResponse {
   repeated Worker workers = 1;
 }
+
+message ClusterStatusRequest {}
+
+message ClusterServer {
+  string id = 1;
+  string raft_address = 2;
+  string grpc_address = 3;
+  bool voter = 4;
+  bool leader = 5;
+}
+
+message ClusterStatusResponse {
+  string node_id = 1;
+  string state = 2;  // Leader, Follower, Candidate, Shutdown
+  string leader_id = 3;
+  string leader_address = 4;  // the leader's gRPC address, if known
+  uint64 term = 5;
+  uint64 last_index = 6;
+  uint64 applied_index = 7;
+  uint64 commit_index = 8;
+  repeated ClusterServer servers = 9;
+}
+
+message AddVoterRequest {
+  string id = 1;
+  string raft_address = 2;
+  string grpc_address = 3;
+}
+
+message AddVoterResponse {}
+
+message RemoveServerRequest {
+  string id = 1;
+}
+
+message RemoveServerResponse {}

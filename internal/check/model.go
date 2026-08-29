@@ -296,11 +296,12 @@ func Model(defaultMax int) porcupine.Model {
 		},
 		Equal: func(a, b interface{}) bool { return a.(jobState) == b.(jobState) },
 		DescribeOperation: func(input, output interface{}) string {
-			in, out := input.(opInput), output.(opOutput)
+			in, _ := input.(opInput)
+			out, _ := output.(opOutput)
 			return describeOp(in, out)
 		},
 		DescribeState: func(state interface{}) string {
-			s := state.(jobState)
+			s, _ := state.(jobState)
 			if !s.Exists {
 				return "absent"
 			}

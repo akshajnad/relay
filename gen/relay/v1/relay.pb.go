@@ -99,8 +99,11 @@ type Job struct {
 	FinishedAtMs     int64                  `protobuf:"varint,14,opt,name=finished_at_ms,json=finishedAtMs,proto3" json:"finished_at_ms,omitempty"`
 	LastError        string                 `protobuf:"bytes,15,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
 	Result           []byte                 `protobuf:"bytes,16,opt,name=result,proto3" json:"result,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// trace_parent is the W3C traceparent of the submit, so the spans of the
+	// job's acquire, execution and completion join the submit's trace.
+	TraceParent   string `protobuf:"bytes,17,opt,name=trace_parent,json=traceParent,proto3" json:"trace_parent,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Job) Reset() {
@@ -243,6 +246,13 @@ func (x *Job) GetResult() []byte {
 		return x.Result
 	}
 	return nil
+}
+
+func (x *Job) GetTraceParent() string {
+	if x != nil {
+		return x.TraceParent
+	}
+	return ""
 }
 
 // JobEvent is one state transition, appended atomically by the Lua script
@@ -1306,11 +1316,407 @@ func (x *ListWorkersResponse) GetWorkers() []*Worker {
 	return nil
 }
 
+type ClusterStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClusterStatusRequest) Reset() {
+	*x = ClusterStatusRequest{}
+	mi := &file_relay_v1_relay_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClusterStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClusterStatusRequest) ProtoMessage() {}
+
+func (x *ClusterStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClusterStatusRequest.ProtoReflect.Descriptor instead.
+func (*ClusterStatusRequest) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{20}
+}
+
+type ClusterServer struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	RaftAddress   string                 `protobuf:"bytes,2,opt,name=raft_address,json=raftAddress,proto3" json:"raft_address,omitempty"`
+	GrpcAddress   string                 `protobuf:"bytes,3,opt,name=grpc_address,json=grpcAddress,proto3" json:"grpc_address,omitempty"`
+	Voter         bool                   `protobuf:"varint,4,opt,name=voter,proto3" json:"voter,omitempty"`
+	Leader        bool                   `protobuf:"varint,5,opt,name=leader,proto3" json:"leader,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClusterServer) Reset() {
+	*x = ClusterServer{}
+	mi := &file_relay_v1_relay_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClusterServer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClusterServer) ProtoMessage() {}
+
+func (x *ClusterServer) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClusterServer.ProtoReflect.Descriptor instead.
+func (*ClusterServer) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ClusterServer) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ClusterServer) GetRaftAddress() string {
+	if x != nil {
+		return x.RaftAddress
+	}
+	return ""
+}
+
+func (x *ClusterServer) GetGrpcAddress() string {
+	if x != nil {
+		return x.GrpcAddress
+	}
+	return ""
+}
+
+func (x *ClusterServer) GetVoter() bool {
+	if x != nil {
+		return x.Voter
+	}
+	return false
+}
+
+func (x *ClusterServer) GetLeader() bool {
+	if x != nil {
+		return x.Leader
+	}
+	return false
+}
+
+type ClusterStatusResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"` // Leader, Follower, Candidate, Shutdown
+	LeaderId      string                 `protobuf:"bytes,3,opt,name=leader_id,json=leaderId,proto3" json:"leader_id,omitempty"`
+	LeaderAddress string                 `protobuf:"bytes,4,opt,name=leader_address,json=leaderAddress,proto3" json:"leader_address,omitempty"` // the leader's gRPC address, if known
+	Term          uint64                 `protobuf:"varint,5,opt,name=term,proto3" json:"term,omitempty"`
+	LastIndex     uint64                 `protobuf:"varint,6,opt,name=last_index,json=lastIndex,proto3" json:"last_index,omitempty"`
+	AppliedIndex  uint64                 `protobuf:"varint,7,opt,name=applied_index,json=appliedIndex,proto3" json:"applied_index,omitempty"`
+	CommitIndex   uint64                 `protobuf:"varint,8,opt,name=commit_index,json=commitIndex,proto3" json:"commit_index,omitempty"`
+	Servers       []*ClusterServer       `protobuf:"bytes,9,rep,name=servers,proto3" json:"servers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClusterStatusResponse) Reset() {
+	*x = ClusterStatusResponse{}
+	mi := &file_relay_v1_relay_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClusterStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClusterStatusResponse) ProtoMessage() {}
+
+func (x *ClusterStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClusterStatusResponse.ProtoReflect.Descriptor instead.
+func (*ClusterStatusResponse) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *ClusterStatusResponse) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *ClusterStatusResponse) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *ClusterStatusResponse) GetLeaderId() string {
+	if x != nil {
+		return x.LeaderId
+	}
+	return ""
+}
+
+func (x *ClusterStatusResponse) GetLeaderAddress() string {
+	if x != nil {
+		return x.LeaderAddress
+	}
+	return ""
+}
+
+func (x *ClusterStatusResponse) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
+func (x *ClusterStatusResponse) GetLastIndex() uint64 {
+	if x != nil {
+		return x.LastIndex
+	}
+	return 0
+}
+
+func (x *ClusterStatusResponse) GetAppliedIndex() uint64 {
+	if x != nil {
+		return x.AppliedIndex
+	}
+	return 0
+}
+
+func (x *ClusterStatusResponse) GetCommitIndex() uint64 {
+	if x != nil {
+		return x.CommitIndex
+	}
+	return 0
+}
+
+func (x *ClusterStatusResponse) GetServers() []*ClusterServer {
+	if x != nil {
+		return x.Servers
+	}
+	return nil
+}
+
+type AddVoterRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	RaftAddress   string                 `protobuf:"bytes,2,opt,name=raft_address,json=raftAddress,proto3" json:"raft_address,omitempty"`
+	GrpcAddress   string                 `protobuf:"bytes,3,opt,name=grpc_address,json=grpcAddress,proto3" json:"grpc_address,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddVoterRequest) Reset() {
+	*x = AddVoterRequest{}
+	mi := &file_relay_v1_relay_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddVoterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddVoterRequest) ProtoMessage() {}
+
+func (x *AddVoterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddVoterRequest.ProtoReflect.Descriptor instead.
+func (*AddVoterRequest) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *AddVoterRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *AddVoterRequest) GetRaftAddress() string {
+	if x != nil {
+		return x.RaftAddress
+	}
+	return ""
+}
+
+func (x *AddVoterRequest) GetGrpcAddress() string {
+	if x != nil {
+		return x.GrpcAddress
+	}
+	return ""
+}
+
+type AddVoterResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddVoterResponse) Reset() {
+	*x = AddVoterResponse{}
+	mi := &file_relay_v1_relay_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddVoterResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddVoterResponse) ProtoMessage() {}
+
+func (x *AddVoterResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddVoterResponse.ProtoReflect.Descriptor instead.
+func (*AddVoterResponse) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{24}
+}
+
+type RemoveServerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveServerRequest) Reset() {
+	*x = RemoveServerRequest{}
+	mi := &file_relay_v1_relay_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveServerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveServerRequest) ProtoMessage() {}
+
+func (x *RemoveServerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveServerRequest.ProtoReflect.Descriptor instead.
+func (*RemoveServerRequest) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *RemoveServerRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type RemoveServerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveServerResponse) Reset() {
+	*x = RemoveServerResponse{}
+	mi := &file_relay_v1_relay_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveServerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveServerResponse) ProtoMessage() {}
+
+func (x *RemoveServerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveServerResponse.ProtoReflect.Descriptor instead.
+func (*RemoveServerResponse) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{26}
+}
+
 var File_relay_v1_relay_proto protoreflect.FileDescriptor
 
 const file_relay_v1_relay_proto_rawDesc = "" +
 	"\n" +
-	"\x14relay/v1/relay.proto\x12\brelay.v1\"\x92\x04\n" +
+	"\x14relay/v1/relay.proto\x12\brelay.v1\"\xb5\x04\n" +
 	"\x03Job\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x18\n" +
@@ -1332,7 +1738,8 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x0efinished_at_ms\x18\x0e \x01(\x03R\ffinishedAtMs\x12\x1d\n" +
 	"\n" +
 	"last_error\x18\x0f \x01(\tR\tlastError\x12\x16\n" +
-	"\x06result\x18\x10 \x01(\fR\x06result\"\x89\x01\n" +
+	"\x06result\x18\x10 \x01(\fR\x06result\x12!\n" +
+	"\ftrace_parent\x18\x11 \x01(\tR\vtraceParent\"\x89\x01\n" +
 	"\bJobEvent\x12\x13\n" +
 	"\x05at_ms\x18\x01 \x01(\x03R\x04atMs\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x1b\n" +
@@ -1402,7 +1809,33 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\vactive_jobs\x18\a \x01(\x05R\n" +
 	"activeJobs\"A\n" +
 	"\x13ListWorkersResponse\x12*\n" +
-	"\aworkers\x18\x01 \x03(\v2\x10.relay.v1.WorkerR\aworkers*\x9c\x01\n" +
+	"\aworkers\x18\x01 \x03(\v2\x10.relay.v1.WorkerR\aworkers\"\x16\n" +
+	"\x14ClusterStatusRequest\"\x93\x01\n" +
+	"\rClusterServer\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
+	"\fraft_address\x18\x02 \x01(\tR\vraftAddress\x12!\n" +
+	"\fgrpc_address\x18\x03 \x01(\tR\vgrpcAddress\x12\x14\n" +
+	"\x05voter\x18\x04 \x01(\bR\x05voter\x12\x16\n" +
+	"\x06leader\x18\x05 \x01(\bR\x06leader\"\xb8\x02\n" +
+	"\x15ClusterStatusResponse\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12\x1b\n" +
+	"\tleader_id\x18\x03 \x01(\tR\bleaderId\x12%\n" +
+	"\x0eleader_address\x18\x04 \x01(\tR\rleaderAddress\x12\x12\n" +
+	"\x04term\x18\x05 \x01(\x04R\x04term\x12\x1d\n" +
+	"\n" +
+	"last_index\x18\x06 \x01(\x04R\tlastIndex\x12#\n" +
+	"\rapplied_index\x18\a \x01(\x04R\fappliedIndex\x12!\n" +
+	"\fcommit_index\x18\b \x01(\x04R\vcommitIndex\x121\n" +
+	"\aservers\x18\t \x03(\v2\x17.relay.v1.ClusterServerR\aservers\"g\n" +
+	"\x0fAddVoterRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
+	"\fraft_address\x18\x02 \x01(\tR\vraftAddress\x12!\n" +
+	"\fgrpc_address\x18\x03 \x01(\tR\vgrpcAddress\"\x12\n" +
+	"\x10AddVoterResponse\"%\n" +
+	"\x13RemoveServerRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\x16\n" +
+	"\x14RemoveServerResponse*\x9c\x01\n" +
 	"\tJobStatus\x12\x1a\n" +
 	"\x16JOB_STATUS_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12JOB_STATUS_PENDING\x10\x01\x12\x15\n" +
@@ -1421,7 +1854,11 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"AcquireJob\x12\x1b.relay.v1.AcquireJobRequest\x1a\x1c.relay.v1.AcquireJobResponse\x12J\n" +
 	"\vCompleteJob\x12\x1c.relay.v1.CompleteJobRequest\x1a\x1d.relay.v1.CompleteJobResponse\x12>\n" +
 	"\aFailJob\x12\x18.relay.v1.FailJobRequest\x1a\x19.relay.v1.FailJobResponse\x12J\n" +
-	"\vListWorkers\x12\x1c.relay.v1.ListWorkersRequest\x1a\x1d.relay.v1.ListWorkersResponseB1Z/github.com/akshajnad/relay/gen/relay/v1;relayv1b\x06proto3"
+	"\vListWorkers\x12\x1c.relay.v1.ListWorkersRequest\x1a\x1d.relay.v1.ListWorkersResponse2\xf4\x01\n" +
+	"\x0eClusterService\x12P\n" +
+	"\rClusterStatus\x12\x1e.relay.v1.ClusterStatusRequest\x1a\x1f.relay.v1.ClusterStatusResponse\x12A\n" +
+	"\bAddVoter\x12\x19.relay.v1.AddVoterRequest\x1a\x1a.relay.v1.AddVoterResponse\x12M\n" +
+	"\fRemoveServer\x12\x1d.relay.v1.RemoveServerRequest\x1a\x1e.relay.v1.RemoveServerResponseB1Z/github.com/akshajnad/relay/gen/relay/v1;relayv1b\x06proto3"
 
 var (
 	file_relay_v1_relay_proto_rawDescOnce sync.Once
@@ -1436,7 +1873,7 @@ func file_relay_v1_relay_proto_rawDescGZIP() []byte {
 }
 
 var file_relay_v1_relay_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_relay_v1_relay_proto_goTypes = []any{
 	(JobStatus)(0),                 // 0: relay.v1.JobStatus
 	(*Job)(nil),                    // 1: relay.v1.Job
@@ -1459,6 +1896,13 @@ var file_relay_v1_relay_proto_goTypes = []any{
 	(*ListWorkersRequest)(nil),     // 18: relay.v1.ListWorkersRequest
 	(*Worker)(nil),                 // 19: relay.v1.Worker
 	(*ListWorkersResponse)(nil),    // 20: relay.v1.ListWorkersResponse
+	(*ClusterStatusRequest)(nil),   // 21: relay.v1.ClusterStatusRequest
+	(*ClusterServer)(nil),          // 22: relay.v1.ClusterServer
+	(*ClusterStatusResponse)(nil),  // 23: relay.v1.ClusterStatusResponse
+	(*AddVoterRequest)(nil),        // 24: relay.v1.AddVoterRequest
+	(*AddVoterResponse)(nil),       // 25: relay.v1.AddVoterResponse
+	(*RemoveServerRequest)(nil),    // 26: relay.v1.RemoveServerRequest
+	(*RemoveServerResponse)(nil),   // 27: relay.v1.RemoveServerResponse
 }
 var file_relay_v1_relay_proto_depIdxs = []int32{
 	0,  // 0: relay.v1.Job.status:type_name -> relay.v1.JobStatus
@@ -1469,27 +1913,34 @@ var file_relay_v1_relay_proto_depIdxs = []int32{
 	1,  // 5: relay.v1.AcquireJobResponse.job:type_name -> relay.v1.Job
 	0,  // 6: relay.v1.FailJobResponse.status:type_name -> relay.v1.JobStatus
 	19, // 7: relay.v1.ListWorkersResponse.workers:type_name -> relay.v1.Worker
-	3,  // 8: relay.v1.JobService.SubmitJob:input_type -> relay.v1.SubmitJobRequest
-	5,  // 9: relay.v1.JobService.GetJob:input_type -> relay.v1.GetJobRequest
-	7,  // 10: relay.v1.WorkerService.RegisterWorker:input_type -> relay.v1.RegisterWorkerRequest
-	10, // 11: relay.v1.WorkerService.Heartbeat:input_type -> relay.v1.HeartbeatRequest
-	12, // 12: relay.v1.WorkerService.AcquireJob:input_type -> relay.v1.AcquireJobRequest
-	14, // 13: relay.v1.WorkerService.CompleteJob:input_type -> relay.v1.CompleteJobRequest
-	16, // 14: relay.v1.WorkerService.FailJob:input_type -> relay.v1.FailJobRequest
-	18, // 15: relay.v1.WorkerService.ListWorkers:input_type -> relay.v1.ListWorkersRequest
-	4,  // 16: relay.v1.JobService.SubmitJob:output_type -> relay.v1.SubmitJobResponse
-	6,  // 17: relay.v1.JobService.GetJob:output_type -> relay.v1.GetJobResponse
-	8,  // 18: relay.v1.WorkerService.RegisterWorker:output_type -> relay.v1.RegisterWorkerResponse
-	11, // 19: relay.v1.WorkerService.Heartbeat:output_type -> relay.v1.HeartbeatResponse
-	13, // 20: relay.v1.WorkerService.AcquireJob:output_type -> relay.v1.AcquireJobResponse
-	15, // 21: relay.v1.WorkerService.CompleteJob:output_type -> relay.v1.CompleteJobResponse
-	17, // 22: relay.v1.WorkerService.FailJob:output_type -> relay.v1.FailJobResponse
-	20, // 23: relay.v1.WorkerService.ListWorkers:output_type -> relay.v1.ListWorkersResponse
-	16, // [16:24] is the sub-list for method output_type
-	8,  // [8:16] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	22, // 8: relay.v1.ClusterStatusResponse.servers:type_name -> relay.v1.ClusterServer
+	3,  // 9: relay.v1.JobService.SubmitJob:input_type -> relay.v1.SubmitJobRequest
+	5,  // 10: relay.v1.JobService.GetJob:input_type -> relay.v1.GetJobRequest
+	7,  // 11: relay.v1.WorkerService.RegisterWorker:input_type -> relay.v1.RegisterWorkerRequest
+	10, // 12: relay.v1.WorkerService.Heartbeat:input_type -> relay.v1.HeartbeatRequest
+	12, // 13: relay.v1.WorkerService.AcquireJob:input_type -> relay.v1.AcquireJobRequest
+	14, // 14: relay.v1.WorkerService.CompleteJob:input_type -> relay.v1.CompleteJobRequest
+	16, // 15: relay.v1.WorkerService.FailJob:input_type -> relay.v1.FailJobRequest
+	18, // 16: relay.v1.WorkerService.ListWorkers:input_type -> relay.v1.ListWorkersRequest
+	21, // 17: relay.v1.ClusterService.ClusterStatus:input_type -> relay.v1.ClusterStatusRequest
+	24, // 18: relay.v1.ClusterService.AddVoter:input_type -> relay.v1.AddVoterRequest
+	26, // 19: relay.v1.ClusterService.RemoveServer:input_type -> relay.v1.RemoveServerRequest
+	4,  // 20: relay.v1.JobService.SubmitJob:output_type -> relay.v1.SubmitJobResponse
+	6,  // 21: relay.v1.JobService.GetJob:output_type -> relay.v1.GetJobResponse
+	8,  // 22: relay.v1.WorkerService.RegisterWorker:output_type -> relay.v1.RegisterWorkerResponse
+	11, // 23: relay.v1.WorkerService.Heartbeat:output_type -> relay.v1.HeartbeatResponse
+	13, // 24: relay.v1.WorkerService.AcquireJob:output_type -> relay.v1.AcquireJobResponse
+	15, // 25: relay.v1.WorkerService.CompleteJob:output_type -> relay.v1.CompleteJobResponse
+	17, // 26: relay.v1.WorkerService.FailJob:output_type -> relay.v1.FailJobResponse
+	20, // 27: relay.v1.WorkerService.ListWorkers:output_type -> relay.v1.ListWorkersResponse
+	23, // 28: relay.v1.ClusterService.ClusterStatus:output_type -> relay.v1.ClusterStatusResponse
+	25, // 29: relay.v1.ClusterService.AddVoter:output_type -> relay.v1.AddVoterResponse
+	27, // 30: relay.v1.ClusterService.RemoveServer:output_type -> relay.v1.RemoveServerResponse
+	20, // [20:31] is the sub-list for method output_type
+	9,  // [9:20] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_relay_v1_relay_proto_init() }
@@ -1503,9 +1954,9 @@ func file_relay_v1_relay_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_relay_v1_relay_proto_rawDesc), len(file_relay_v1_relay_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   20,
+			NumMessages:   27,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   3,
 		},
 		GoTypes:           file_relay_v1_relay_proto_goTypes,
 		DependencyIndexes: file_relay_v1_relay_proto_depIdxs,

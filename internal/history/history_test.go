@@ -58,3 +58,25 @@ func TestMalformedMiddleLineIsAnError(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 }
+
+func TestReturnBeforeInvokeIsRejected(t *testing.T) {
+	dir := t.TempDir()
+	lines := `{"p":"x","op":1,"type":"invoke","t":100,"m":"get"}` + "\n" + `{"p":"x","op":1,"type":"ok","t":90,"m":"get"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "x.jsonl"), []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadDir(dir); err == nil {
+		t.Fatal("an op that returned before it was invoked was accepted")
+	}
+}
+
+func TestClockIsMonotonic(t *testing.T) {
+	prev, _ := clockNow()
+	for i := 0; i < 10000; i++ {
+		now, wall := clockNow()
+		if now < prev || wall == 0 {
+			t.Fatalf("clock went backwards: %d after %d", now, prev)
+		}
+		prev = now
+	}
+}

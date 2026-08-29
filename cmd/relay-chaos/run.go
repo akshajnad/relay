@@ -50,6 +50,8 @@ type backend struct {
 	// loadTarget is what the load generator dials (directly).
 	loadTarget string
 	raft       bool
+	// nodeIDs are the coordinators' Raft server ids, by index.
+	nodeIDs []string
 }
 
 var backends = map[string]backend{
@@ -58,6 +60,14 @@ var backends = map[string]backend{
 		coordinators: []string{"coordinator"},
 		workerTarget: "toxiproxy:17000",
 		loadTarget:   "coordinator:50051",
+	},
+	"raft": {
+		profile:      "raft",
+		coordinators: []string{"coord1", "coord2", "coord3"},
+		nodeIDs:      []string{"n1", "n2", "n3"},
+		workerTarget: "n1=toxiproxy:17001,n2=toxiproxy:17002,n3=toxiproxy:17003",
+		loadTarget:   "n1=coord1:50051,n2=coord2:50051,n3=coord3:50051",
+		raft:         true,
 	},
 }
 
@@ -342,10 +352,10 @@ func (r *runner) hostEndpoints(first string) string {
 		return first
 	}
 	var eps []string
-	for _, svc := range r.be.coordinators {
+	for i, svc := range r.be.coordinators {
 		addr, err := r.c.hostPort(svc, 50051)
 		if err == nil {
-			eps = append(eps, svc+"="+addr)
+			eps = append(eps, r.be.nodeIDs[i]+"="+addr)
 		}
 	}
 	return strings.Join(eps, ",")
@@ -484,12 +494,45 @@ func (r *runner) freezeWorkers() {
 	}
 }
 
-// leaderContainer finds the current Raft leader's container.
+// leaderContainer finds the current Raft leader's container: the node
+// that reports itself as leader. If none does (an election is under way),
+// it waits briefly.
 func (r *runner) leaderContainer() (id, service string, err error) {
 	if !r.be.raft {
 		return "", "", errors.New("leader faults need the raft backend")
 	}
-	return "", "", errors.New("not implemented")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		for i, svc := range r.be.coordinators {
+			addr, perr := r.c.hostPort(svc, 50051)
+			if perr != nil {
+				continue
+			}
+			if r.nodeIsLeader(addr) {
+				ids, cerr := r.c.containers(svc)
+				if cerr != nil || len(ids) == 0 {
+					return "", "", fmt.Errorf("leader %s has no container: %v", r.be.nodeIDs[i], cerr)
+				}
+				return ids[0], svc, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return "", "", errors.New("no coordinator reports being leader")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func (r *runner) nodeIsLeader(addr string) bool {
+	conn, err := rpc.Dial(addr)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	st, err := relayv1.NewClusterServiceClient(conn).ClusterStatus(ctx, &relayv1.ClusterStatusRequest{})
+	return err == nil && st.State == "Leader"
 }
 
 // healAll returns every container to running and fully connected and
@@ -523,10 +566,15 @@ func (r *runner) healAll() {
 	}
 }
 
-// connectAs reconnects a container under its service's DNS alias, which a
-// plain `docker network connect` would drop.
+// connectAs reconnects a container under its service's DNS aliases, which
+// a plain `docker network connect` would drop. On backnet a coordinator
+// also answers to <service>-raft, the name its Raft peers use.
 func (c *cluster) connectAs(id, network, service string) error {
-	err := c.docker("network", "connect", "--alias", service, c.network(network), id)
+	args := []string{"network", "connect", "--alias", service}
+	if network == "backnet" {
+		args = append(args, "--alias", service+"-raft")
+	}
+	err := c.docker(append(args, c.network(network), id)...)
 	if err != nil && strings.Contains(err.Error(), "already exists") {
 		return nil
 	}
@@ -581,13 +629,10 @@ func firstLine(s string) string {
 	return s
 }
 
-// dialCoordinators connects to the coordinator endpoint list.
+// dialCoordinators connects to the coordinator endpoint list, following
+// the leader.
 func dialCoordinators(spec string, extra ...grpc.DialOption) (grpc.ClientConnInterface, func(), error) {
-	addr := spec
-	if i := strings.IndexByte(addr, '='); i >= 0 {
-		addr = addr[i+1:]
-	}
-	conn, err := rpc.Dial(addr, extra...)
+	conn, err := rpc.DialCluster(spec, extra...)
 	if err != nil {
 		return nil, nil, err
 	}

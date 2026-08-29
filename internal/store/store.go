@@ -226,3 +226,33 @@ type Leadership interface {
 	// IsLeader reports whether this node currently serves calls.
 	IsLeader() bool
 }
+
+// ClusterServer is one member of a replicated store's cluster.
+type ClusterServer struct {
+	ID       string
+	RaftAddr string
+	GRPCAddr string
+	Voter    bool
+	Leader   bool
+}
+
+// ClusterStatus is one node's view of its cluster.
+type ClusterStatus struct {
+	NodeID       string
+	State        string
+	LeaderID     string
+	LeaderAddr   string
+	Term         uint64
+	LastIndex    uint64
+	AppliedIndex uint64
+	CommitIndex  uint64
+	Servers      []ClusterServer
+}
+
+// Membership is implemented by replicated stores whose cluster can be
+// inspected and resized at runtime. Changes must be made on the leader.
+type Membership interface {
+	ClusterStatus() (ClusterStatus, error)
+	AddVoter(ctx context.Context, id, raftAddr, grpcAddr string) error
+	RemoveServer(ctx context.Context, id string) error
+}

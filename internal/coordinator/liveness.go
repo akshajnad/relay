@@ -29,9 +29,13 @@ func (c *Coordinator) RunLiveness(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-detect.C:
-			c.detectDeadWorkers(ctx)
+			if c.serving() {
+				c.detectDeadWorkers(ctx)
+			}
 		case <-reap.C:
-			c.reapExpiredLeases(ctx)
+			if c.serving() {
+				c.reapExpiredLeases(ctx)
+			}
 		}
 	}
 }

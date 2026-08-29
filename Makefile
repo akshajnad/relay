@@ -4,12 +4,15 @@ BUF_VERSION := v1.74.0
 BUF := go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)
 COMPOSE := docker compose -f deploy/docker-compose.yml
 BENCH_ARGS ?=
-BACKEND ?= redis
+BACKEND ?= raft
+WORKERS ?= 3
+COMPOSE_FILE_redis := deploy/docker-compose.yml
+COMPOSE_FILE_raft := deploy/docker-compose.raft.yml
 SEED ?= 1
 DURATION ?= 5m
 SEEDS ?= 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
 
-.PHONY: all generate build test integration bench image lint clean chaos chaos-sweep
+.PHONY: all generate build test integration bench image lint clean chaos chaos-sweep up down
 
 all: build
 
@@ -25,6 +28,14 @@ build:
 ## test: unit tests (Lua scripts, coordinator, worker) against a real Redis via testcontainers
 test:
 	go test -race -count=1 ./internal/... ./cmd/...
+
+## up: start a local cluster (BACKEND=raft: 3 coordinators; BACKEND=redis: Redis + 1 coordinator)
+up:
+	docker compose -f $(COMPOSE_FILE_$(BACKEND)) up -d --build --wait --scale worker=$(WORKERS)
+
+## down: stop the local cluster and delete its volumes
+down:
+	docker compose -f $(COMPOSE_FILE_$(BACKEND)) --profile extra down -v --remove-orphans
 
 ## image: build the relay container image used by compose
 image:
