@@ -1,0 +1,37 @@
+# Observability stack, layered on either cluster:
+#
+#   docker compose -f deploy/docker-compose.raft.yml -f deploy/docker-compose.observability.yml up -d
+#
+# (`make up` does this.) Set RELAY_OTLP_ENDPOINT=jaeger:4317 so the
+# coordinators and workers export traces.
+#
+#   Jaeger      http://localhost:16686   traces: submit -> enqueue -> dispatch -> execute -> complete
+#   Prometheus  http://localhost:9095
+#   Grafana     http://localhost:3000    dashboard "Relay" (provisioned, anonymous admin)
+services:
+  jaeger:
+    image: jaegertracing/jaeger:2.10.0
+    ports:
+      - "127.0.0.1:16686:16686"
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9095:9090"
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/relay.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on: [prometheus]

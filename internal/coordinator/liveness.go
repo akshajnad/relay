@@ -72,6 +72,7 @@ func (c *Coordinator) reapExpiredLeases(ctx context.Context) {
 	}
 	c.metrics.Requeued.Add(int64(r.Requeued))
 	c.metrics.Dead.Add(int64(r.Dead))
+	c.metrics.LeaseExpirations.Add(int64(r.Requeued + r.Dead))
 	c.notifier.Signal(r.Requeued)
 	c.log.Warn("expired leases reaped", "requeued", r.Requeued, "dead_lettered", r.Dead)
 }

@@ -17,6 +17,7 @@ x-relay-image: &relay-image
 x-raft-env: &raft-env
   RELAY_STORE: raft
   RELAY_LOG_LEVEL: ${RELAY_LOG_LEVEL:-info}
+  RELAY_OTLP_ENDPOINT: ${RELAY_OTLP_ENDPOINT:-}
   RELAY_BOOTSTRAP: "true"
   RELAY_PEERS: n1=coord1:7000=coord1:50051,n2=coord2:7000=coord2:50051,n3=coord3:7000=coord3:50051
   RELAY_LEASE_DURATION: ${RELAY_LEASE_DURATION:-10s}
@@ -96,6 +97,7 @@ services:
       RELAY_CONCURRENCY: ${RELAY_WORKER_CONCURRENCY:-4}
       RELAY_SLEEP_DURATION: ${RELAY_SLEEP_DURATION:-20ms}
       RELAY_LOG_LEVEL: ${RELAY_LOG_LEVEL:-info}
+      RELAY_OTLP_ENDPOINT: ${RELAY_OTLP_ENDPOINT:-}
     depends_on:
       coord1: {condition: service_healthy}
       coord2: {condition: service_healthy}

@@ -270,3 +270,40 @@ sets) from the jobs. `TestSnapshotRestoreAndCatchUp` compacts the log
 past a stopped follower and checks that it installs the snapshot and
 converges. `TestFullClusterRestart` restarts all three nodes from
 snapshot plus log.
+
+### D7. Observability (M4)
+
+**One trace per job across an asynchronous queue.** otelgrpc propagates
+trace context in gRPC metadata, which covers every RPC hop. The gap from
+"enqueued" to "picked up by a worker" is not an RPC, so the submit's W3C
+`traceparent` is stored with the job: a `trace_parent` hash field in
+Redis, a command field in Raft. When the job is assigned, the coordinator
+creates a `relay.dispatch` span *in the job's trace*. The span is backdated
+to the acquire call, carries the measured dispatch latency and queue wait
+as attributes, and links to the worker's AcquireJob RPC span (a different
+trace). The dispatch span's traceparent goes back in the AcquireJob
+response, so the worker's `relay.execute` span is its child, and the
+Complete/Fail RPC is a child of the execution. A retried job therefore
+shows each attempt as its own dispatch → execute → report branch under one
+enqueue. `TestJobTraceSpansSubmitToComplete` asserts the whole parent
+chain in-process. *Rejected:* one trace per AcquireJob. That is easier,
+but it loses the ability to see a job's whole life, including retries
+and reassignments, in one place.
+
+**Prometheus.** `/metrics` serves the Prometheus text format, and the
+HdrHistogram JSON snapshot that relay-bench reads moved to
+`/metrics.json`. The definitions are unchanged. Counters read the
+existing atomics at scrape time (`CounterFunc`) instead of being counted
+twice. The latency histograms feed Prometheus and HdrHistogram from the
+same `Record` call. Prometheus buckets are coarse, so the benchmark
+numbers keep coming from HdrHistogram. `relay_queue_depth` and
+`relay_leases_active` are gauges read from the store at scrape time. Every
+Raft node reports its own replica's depth, so the dashboard shows the
+max.
+
+**Startup bug found by running it.** With tracing enabled, the
+coordinator exited at startup with "conflicting Schema URL". The SDK's
+default resource and the pinned semconv version disagreed. Unit tests
+never set an endpoint, so they missed it. The fix is a schemaless
+service-name resource, and `TestSetupWithEndpoint` now exercises the real
+exporter path.

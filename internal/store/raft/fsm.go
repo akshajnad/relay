@@ -456,7 +456,7 @@ func (j *job) public() *store.Job {
 		Status: j.Status, Attempts: j.Attempts, MaxAttempts: j.MaxAttempts,
 		LeaseOwner: j.LeaseOwner, LeaseToken: j.LeaseToken,
 		CreatedAt: j.CreatedAt, EnqueuedAt: j.EnqueuedAt, LeasedAt: j.LeasedAt, FinishedAt: j.FinishedAt,
-		LastError: j.LastError, Result: append([]byte(nil), j.Result...),
+		LastError: j.LastError, Result: append([]byte(nil), j.Result...), TraceParent: j.TraceParent,
 	}
 }
 

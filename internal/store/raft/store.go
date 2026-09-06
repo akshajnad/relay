@@ -474,7 +474,7 @@ func (s *Store) Submit(_ context.Context, p store.SubmitParams) (string, bool, e
 		return "", false, err
 	}
 	res, err := s.propose(&command{Op: opSubmit, NowMs: time.Now().UnixMilli(), ID: newID.String(),
-		Type: p.Type, Payload: p.Payload, Key: p.IdempotencyKey, MaxAttempts: p.MaxAttempts})
+		Type: p.Type, Payload: p.Payload, Key: p.IdempotencyKey, MaxAttempts: p.MaxAttempts, TraceParent: p.TraceParent})
 	if err != nil {
 		return "", false, err
 	}

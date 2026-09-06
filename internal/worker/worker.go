@@ -12,6 +12,10 @@ import (
 	"time"
 
 	relayv1 "github.com/akshajnad/relay/gen/relay/v1"
+	"github.com/akshajnad/relay/internal/tracing"
+	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -33,6 +37,9 @@ type Config struct {
 	// AcquireTimeout is the client-side deadline for one AcquireJob
 	// long-poll. It must exceed the coordinator's poll timeout.
 	AcquireTimeout time.Duration
+	// OnExecute, if set, is called just before a handler starts (start =
+	// true) and just after it returns. Benchmarks use it for timing.
+	OnExecute func(job Job, token int64, start bool)
 }
 
 func DefaultConfig() Config {
@@ -278,9 +285,29 @@ func (w *Worker) process(ctx context.Context, pj *relayv1.Job) {
 		ID: pj.Id, Type: pj.Type, Payload: pj.Payload,
 		Attempt: int(pj.Attempts), MaxAttempts: int(pj.MaxAttempts), WorkerID: pj.LeaseOwner,
 	}
+	// The execution joins the job's trace (as a child of its dispatch), and
+	// the Complete/Fail RPC below becomes a child of the execution.
+	ctx, span := tracing.Tracer().Start(tracing.WithTraceParent(ctx, pj.TraceParent), "relay.execute",
+		trace.WithAttributes(
+			attribute.String("relay.job.id", job.ID),
+			attribute.String("relay.job.type", job.Type),
+			attribute.Int("relay.attempt", job.Attempt),
+			attribute.Int64("relay.lease.token", pj.LeaseToken),
+			attribute.String("relay.worker.id", job.WorkerID),
+		))
+	defer span.End()
 	log := w.log.With("job_id", job.ID, "type", job.Type, "attempt", job.Attempt, "lease_token", pj.LeaseToken)
 	log.Debug("running job")
+	if w.cfg.OnExecute != nil {
+		w.cfg.OnExecute(job, pj.LeaseToken, true)
+	}
 	result, err := w.handlers.run(ctx, job)
+	if w.cfg.OnExecute != nil {
+		w.cfg.OnExecute(job, pj.LeaseToken, false)
+	}
+	if err != nil {
+		span.SetStatus(otelcodes.Error, err.Error())
+	}
 	if ctx.Err() != nil {
 		// Shutdown timeout: don't report, let the lease lapse.
 		log.Warn("abandoned job at shutdown")
