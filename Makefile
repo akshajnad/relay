@@ -12,7 +12,7 @@ SEED ?= 1
 DURATION ?= 5m
 SEEDS ?= 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
 
-.PHONY: all generate build test integration bench image lint clean chaos chaos-sweep up down
+.PHONY: all generate build test integration bench bench-relay image lint clean chaos chaos-sweep up down
 
 all: build
 
@@ -59,8 +59,13 @@ chaos-sweep: image
 		go run ./cmd/relay-chaos run --backend $(BACKEND) --seed $$s --duration $(DURATION) || exit 1; \
 	done
 
-## bench: bring up a compose cluster and measure scheduling latency
-bench:
+## bench: comparative benchmark, Relay-Redis vs Relay-Raft vs asynq (~1.5h;
+##        BENCH_ARGS="--trials 5 --sat-jobs 5000" for a quick look)
+bench: image
+	go run ./cmd/relay-bench compare $(BENCH_ARGS)
+
+## bench-relay: the original single-backend benchmark (Relay-Redis, coordinator-measured latency)
+bench-relay:
 	go run ./cmd/relay-bench $(BENCH_ARGS)
 
 lint:
@@ -70,3 +75,4 @@ lint:
 
 clean:
 	rm -rf bin/
+

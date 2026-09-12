@@ -39,6 +39,7 @@ func run() error {
 	logFormat := fs.String("log-format", "json", "json|text")
 	historyDir := fs.String("history-dir", "", "record every RPC to a JSONL history file in this directory (chaos testing)")
 	otlp := fs.String("otlp-endpoint", "", "OTLP gRPC endpoint (host:port) for traces; empty disables tracing")
+	historyRPCs := fs.Bool("history-rpcs", true, "with --history-dir, record every RPC (false: only handler start/end, for benchmarks)")
 	fs.IntVar(&cfg.Concurrency, "concurrency", 1, "jobs to run in parallel")
 	fs.StringVar(&cfg.Hostname, "hostname", host, "hostname reported to the coordinator")
 	fs.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "how long to drain in-flight jobs on SIGTERM")
@@ -64,7 +65,9 @@ func run() error {
 			return err
 		}
 		defer rec.Close()
-		dialOpts = append(dialOpts, grpc.WithChainUnaryInterceptor(history.UnaryClientInterceptor(rec)))
+		if *historyRPCs {
+			dialOpts = append(dialOpts, grpc.WithChainUnaryInterceptor(history.UnaryClientInterceptor(rec)))
+		}
 		// Handler start and end, for benchmark timing.
 		cfg.OnExecute = func(job worker.Job, token int64, start bool) {
 			m := history.ExecEnd

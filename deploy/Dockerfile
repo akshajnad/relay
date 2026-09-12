@@ -9,7 +9,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -tags "$GO_TAGS" -o /out/ \
-    ./cmd/coordinator ./cmd/worker ./cmd/relayctl ./cmd/relay-chaos
+    ./cmd/coordinator ./cmd/worker ./cmd/relayctl ./cmd/relay-chaos ./cmd/relay-bench ./cmd/asynq-worker
 
 FROM alpine:3.21
 RUN adduser -D -u 10001 relay && mkdir /data && chown relay /data
