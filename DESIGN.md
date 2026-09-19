@@ -225,7 +225,7 @@ partitions, and full-cluster restarts while leases are live.
 | Submit reply lost; client retries | The same job id is returned | Idempotency key, atomic with creation |
 | Coordinator crash (Redis) | Clients get UNAVAILABLE and retry; liveness waits out a startup grace | All state is in Redis |
 | Raft follower crash / partition | Nothing visible; it catches up from the log or a snapshot when it returns | Quorum still commits |
-| Raft leader crash | Election (≈1–3s with defaults); clients follow NOT_LEADER to the new leader; new leader resets soft leases | Committed entries survive (Leader Completeness); tokens are log indices |
+| Raft leader crash | Election; measured from kill to the first job served by the new leader: median 2.5s, worst 3.6s over 30 trials; clients follow NOT_LEADER to the new leader; new leader resets soft leases | Committed entries survive (Leader Completeness); tokens are log indices |
 | Raft leader partitioned to the minority | It steps down after its lease timeout; its writes cannot commit, its reads fail `VerifyLeader`; the majority elects a new leader | Quorum intersection |
 | Whole Raft cluster restarts | State is restored from snapshot plus log; serving resumes with a fresh grace period | Durable log (bbolt), deterministic replay |
 | Clock skew between nodes | No effect on safety; Raft deadlines use the leader's monotonic clock, Redis uses Redis `TIME` | Tokens, not times, decide every transition |
@@ -320,7 +320,8 @@ error in that tracking turns into overload or idling, plus a delivery
 protocol on top. With *pull* (long-poll), a worker asks only when it has a
 free slot, so capacity is implicit and backpressure is free. The cost is
 the wake-up path, which the FIFO notifier makes cheap: one wake per job,
-no lost wake-ups. Latency stays sub-millisecond on Redis (see benchmarks).
+no lost wake-ups. On Redis, measured dispatch latency is 0.52 ms p50 and
+0.96 ms p99 (README, Benchmarks).
 On Raft, an acquire costs a log commit, which push would also pay.
 
 **Replicating heartbeats** (lease deadlines in the FSM). This is simpler
@@ -358,6 +359,19 @@ debuggable fact.
   safe.
 - **Commands are JSON**, roughly 2× larger than protobuf. That is simple
   and deterministic, but not compact.
+- **The coordinator's internal latency metric has 1 ms resolution in its
+  "eligible" term.** `enqueued_at` and the store's `now` are whole
+  milliseconds (Redis `TIME`, `UnixMilli`), so a 0.1 ms wait can be
+  recorded as 1 ms. Its median is unaffected, but its p95 reads higher
+  than the externally measured latency (README, Benchmarks).
+  Microsecond timestamps would remove this; the definition itself would
+  not change.
+- **Relay re-runs more work than asynq under short pauses.** Detecting
+  failure in 3s means a worker stalled for 5s has its jobs reassigned
+  while it is still running them: 45 duplicate executions against
+  asynq's 8 in the fault benchmark. Fencing keeps every duplicate from
+  becoming a second completion. A longer `missed-heartbeats` trades
+  recovery time for fewer re-runs.
 
 ## 12. Decision log
 
@@ -664,3 +678,47 @@ default resource and the pinned semconv version disagreed. Unit tests
 never set an endpoint, so they missed it. The fix is a schemaless
 service-name resource, and `TestSetupWithEndpoint` now exercises the real
 exporter path.
+
+### D8. Comparative benchmark methodology (M5)
+
+**One external definition.** asynq exposes no "worker request time", so
+the coordinator's metric cannot be computed for it. The cross-backend
+number is therefore observed from outside, the same way for every backend:
+- **assignment** = handler start;
+- **eligible** = submit invoked;
+- **worker request** = when a slot on that worker became free.
+
+Slot-free times are simulated FIFO from each worker's handler start/end
+notes, and every timestamp comes from `CLOCK_MONOTONIC` inside the one
+Docker VM. The definition matches the project's existing one in shape.
+"Eligible = submit invoked" includes the submit's network leg for every
+backend, so submit RTT is reported next to it. Relay's internal metric is
+still reported, labelled separately, and its definition is unchanged.
+
+**Not handicapping asynq.**
+- It uses its own client, server, mux, `TaskID` and `MaxRetry` APIs, with
+  default configuration and the same Redis settings.
+- It is also run with a 10 ms `TaskCheckInterval`, so its default 1s poll
+  is not the only result shown.
+- Its workers record exactly the same two notes per job as Relay's. Relay
+  workers in benchmark mode record *only* those notes, not every RPC, so
+  neither side carries extra instrumentation.
+- `Retention` (keeping completed tasks) is enabled only in the fault
+  phase, which needs to inspect final state.
+
+**Clocks for recovery and failover.** The start of a trial is the
+container's death as Docker records it (`State.FinishedAt`, on the VM's
+clock). The end is a worker's wall-clock note from the same VM. Host time
+is never used.
+
+**Bug found in the harness.** The first full run's failover trials
+failed. The trickle submitter ran on the host against *published* ports,
+and those are ephemeral: a coordinator restarted by an earlier trial
+came back on a new port, so once it led again nothing was submitted and
+no acquire could succeed. A failed trial also returned before restarting
+the node it had killed. Raft itself was healthy throughout: the leader
+was serving and workers were heartbeating. The trickle now runs in-cluster
+by DNS name, killed nodes are always restarted, and the host client is
+re-dialled for every phase. The partial results were discarded and the
+whole benchmark was rerun, so that every number comes from one
+consistent run.

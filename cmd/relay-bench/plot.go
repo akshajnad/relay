@@ -264,14 +264,18 @@ func cdfChart(dir, name, title, xlabel string, names []string, series [][]float6
 		}
 		p.X.Min = math.Pow(10, math.Floor(math.Log10(lo)))
 		p.X.Max = math.Pow(10, math.Ceil(math.Log10(hi)))
+		// Bottom of the middle of the axis: CDFs start bottom-left, end
+		// top-right, and the backends sit orders of magnitude apart.
+		p.Legend.Top = false
+		p.Legend.Left = true
+		p.Legend.XOffs, p.Legend.YOffs = vg.Points(230), vg.Points(40)
 	} else {
 		p.X.Min = 0 // a linear time axis starts at zero
+		// Top-left is empty: nothing finishes before the first trial.
+		p.Legend.Top = true
+		p.Legend.Left = true
+		p.Legend.XOffs = vg.Points(10)
 	}
-	// Bottom of the middle of the axis: CDFs start at the bottom-left and
-	// finish at the top-right, and backends separate by orders of magnitude.
-	p.Legend.Top = false
-	p.Legend.Left = true
-	p.Legend.XOffs, p.Legend.YOffs = vg.Points(230), vg.Points(40)
 	return save(p, dir, name, vg.Points(640), vg.Points(380))
 }
 
