@@ -12,6 +12,10 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     ./cmd/coordinator ./cmd/worker ./cmd/relayctl ./cmd/relay-chaos ./cmd/relay-bench ./cmd/asynq-worker
 
 FROM alpine:3.21
+# GIT_REVISION is `git rev-parse HEAD` (plus "-dirty"), set by the Makefile;
+# results files record it (internal/buildrev).
+ARG GIT_REVISION=unknown
+LABEL org.opencontainers.image.revision=$GIT_REVISION
 RUN adduser -D -u 10001 relay && mkdir /data && chown relay /data
 COPY --from=build /out/ /usr/local/bin/
 USER relay

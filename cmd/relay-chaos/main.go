@@ -11,6 +11,7 @@
 //
 // load is the workload itself; run starts it inside the cluster's network
 // so its history shares the workers' clock. check re-checks a saved run.
+// summarize folds a sweep's run directories into one results file.
 package main
 
 import (
@@ -33,8 +34,10 @@ func main() {
 		err = loadMain(args)
 	case "check":
 		err = checkMain(args)
+	case "summarize":
+		err = summarizeMain(args)
 	default:
-		err = fmt.Errorf("unknown command %q (want run, load or check)", cmd)
+		err = fmt.Errorf("unknown command %q (want run, load, check or summarize)", cmd)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "relay-chaos:", err)

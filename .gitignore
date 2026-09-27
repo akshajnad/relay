@@ -3,3 +3,10 @@ bench/results/*.pprof
 *.test
 chaos-out
 bench/results/compare-*/*/
+# go build ./cmd/<name> at the repo root
+/coordinator
+/worker
+/relayctl
+/relay-chaos
+/relay-bench
+/asynq-worker

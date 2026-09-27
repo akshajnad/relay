@@ -19,6 +19,7 @@ import (
 	"time"
 
 	relayv1 "github.com/akshajnad/relay/gen/relay/v1"
+	"github.com/akshajnad/relay/internal/buildrev"
 	"github.com/akshajnad/relay/internal/history"
 	"github.com/akshajnad/relay/internal/metrics"
 	"github.com/akshajnad/relay/internal/rpc"
@@ -87,7 +88,7 @@ var benchBackends = map[string]benchBackend{
 		Name: "asynq-tuned", Description: "hibiken/asynq v0.26.0, Redis, TaskCheckInterval=10ms",
 		profile: "asynq", client: "asynq", workerSvc: "asynq-worker", driverTarget: "redis:6379",
 		asynqCheckInterval: "10ms",
-		phases:             []string{"saturate", "latency"},
+		phases:             []string{"saturate", "latency", "recovery", "faults"},
 		Timings: map[string]string{
 			"lease_duration":      "30s (asynq constant)",
 			"recoverer_interval":  "1m (asynq constant)",
@@ -133,6 +134,7 @@ type CompareReport struct {
 	FinishedAt time.Time        `json:"finished_at"`
 	Host       HostInfo         `json:"host"`
 	Docker     DockerInfo       `json:"docker"`
+	Image      buildrev.Image   `json:"image"`
 	Config     compareConfig    `json:"config"`
 	Results    []*BackendResult `json:"results"`
 }
@@ -221,7 +223,7 @@ func compareMain(args []string) error {
 	cfg.Backends = splitList(backends)
 	cfg.Phases = splitList(phases)
 
-	rep := &CompareReport{StartedAt: time.Now().UTC(), Host: hostInfo(), Docker: dockerInfo(), Config: cfg}
+	rep := &CompareReport{StartedAt: time.Now().UTC(), Host: hostInfo(), Docker: dockerInfo(), Image: buildrev.Inspect(cfg.Image), Config: cfg}
 	stamp := rep.StartedAt.Format("20060102T150405Z")
 	runDir, err := filepath.Abs(filepath.Join(cfg.OutDir, "compare-"+stamp))
 	if err != nil {
