@@ -1,0 +1,132 @@
+# Verification record for commit c302e0f44c2950e9756e16c982720724ca0b5f71
+#
+# 1. Clean clone: git clone of branch phase2 into an empty directory, then
+#    make test && make integration && make chaos SEED=1   (exit 0), 2026-10-26.
+#    Host: Apple M4 Pro, macOS 26.6.2, go1.26.1, Docker Desktop 29.9.2 (14 CPUs, 7.7 GB VM).
+# 2. Observability (M4): make up (Raft + Jaeger/Prometheus/Grafana), one
+#    fail-n-times job (n=1, max 3) plus 300 sleep jobs, then the Jaeger,
+#    Prometheus and Grafana HTTP APIs were queried. Result JSON at the end.
+
+## make test
+ok  	github.com/akshajnad/relay/internal/check	1.426s
+ok  	github.com/akshajnad/relay/internal/coordinator	7.384s
+ok  	github.com/akshajnad/relay/internal/envflag	1.212s
+ok  	github.com/akshajnad/relay/internal/history	1.767s
+ok  	github.com/akshajnad/relay/internal/metrics	1.522s
+ok  	github.com/akshajnad/relay/internal/rpc	3.978s
+ok  	github.com/akshajnad/relay/internal/store/raft	10.019s
+ok  	github.com/akshajnad/relay/internal/store/redis	5.881s
+ok  	github.com/akshajnad/relay/internal/tracing	3.472s
+ok  	github.com/akshajnad/relay/internal/worker	4.323s
+ok  	github.com/akshajnad/relay/cmd/relay-bench	4.310s
+ok  	github.com/akshajnad/relay/cmd/relay-chaos	4.227s
+
+## make integration (go test -v, summary lines)
+        relay-chaos: backend=redis seed=7 duration=1m0s workers=5x4 image=relay:nofence (revision unknown)
+    nofence_test.go:83: flagged 10 fencing violations and 5 non-linearizable jobs
+        relay-chaos: backend=raft seed=7 duration=1m0s workers=5x4 image=relay:nofence (revision unknown)
+    nofence_test.go:83: flagged 10 fencing violations and 7 non-linearizable jobs
+--- PASS: TestCheckerCatchesDisabledFencing (147.97s)
+    --- PASS: TestCheckerCatchesDisabledFencing/redis (71.53s)
+    --- PASS: TestCheckerCatchesDisabledFencing/raft (71.11s)
+        relay-chaos: backend=redis seed=3 duration=1m0s workers=5x4 image=relay:dev (revision c302e0f44c2950e9756e16c982720724ca0b5f71)
+        relay-chaos: backend=raft seed=3 duration=1m0s workers=5x4 image=relay:dev (revision c302e0f44c2950e9756e16c982720724ca0b5f71)
+--- PASS: TestChaosShortRun (140.03s)
+    --- PASS: TestChaosShortRun/redis (72.54s)
+    --- PASS: TestChaosShortRun/raft (67.50s)
+ok  	github.com/akshajnad/relay/test/chaos	288.320s
+--- PASS: TestWorkerKilledMidJob (12.89s)
+--- PASS: TestPausedWorkerIsFencedOut (17.83s)
+--- PASS: TestCoordinatorRestart (11.75s)
+--- PASS: TestIdempotentSubmissions (5.14s)
+--- PASS: TestFailNTimesRetriesThenSucceedsOrDies (8.17s)
+    raft_test.go:201: leader n1 killed; n2 elected after 2.241s
+--- PASS: TestRaftLeaderKilled (8.84s)
+--- PASS: TestRaftFollowerRedirects (3.36s)
+    raft_test.go:326: submit to isolated leader n3 failed as expected: rpc error: code = Unavailable desc = store: raft apply submit: leadership lost while committing log
+--- PASS: TestRaftMinorityLeaderStepsDown (5.46s)
+--- PASS: TestRaftMembershipViaRelayctl (7.25s)
+ok  	github.com/akshajnad/relay/test/integration	81.110s
+relay-chaos: backend=raft seed=1 duration=5m0s workers=5x4 image=relay:dev (revision c302e0f44c2950e9756e16c982720724ca0b5f71)
+
+## make chaos SEED=1 (raft, 5m, all faults)
+relay-chaos: backend=raft seed=1 duration=5m0s workers=5x4 image=relay:dev (revision c302e0f44c2950e9756e16c982720724ca0b5f71)
+fault schedule (60 faults):
+PASS: 8728 jobs, 68839 ops (2037 indeterminate)
+  [ok  ] no-lost-acks           checked=8728 violations=0
+  [ok  ] all-jobs-terminal      checked=8728 violations=0
+  [ok  ] terminal-at-most-once  checked=8728 violations=0
+  [ok  ] fencing                checked=23428 violations=0
+  [ok  ] idempotency            checked=8728 violations=0
+  [ok  ] attempts-bounded       checked=8728 violations=0
+  [ok  ] linearizable           checked=8728 violations=0
+
+## observability check
+{
+  "job_id": "01a17984-4efa-7f0c-af8a-cab3f5f7a71f",
+  "job_final": [
+    "status           SUCCEEDED"
+  ],
+  "jaeger_trace_id": "93997fa75d45c8f6761a1ff73db38121",
+  "jaeger_spans": [
+    "relay-coordinator:relay.v1.JobService/SubmitJob",
+    "relay-coordinator:relay.enqueue",
+    "relay-coordinator:relay.dispatch",
+    "relay-worker:relay.execute",
+    "relay-worker:relay.v1.WorkerService/FailJob",
+    "relay-coordinator:relay.v1.WorkerService/FailJob",
+    "relay-coordinator:relay.dispatch",
+    "relay-worker:relay.execute",
+    "relay-worker:relay.v1.WorkerService/CompleteJob",
+    "relay-coordinator:relay.v1.WorkerService/CompleteJob"
+  ],
+  "jaeger_ok": true,
+  "prometheus_up": {
+    "n3": "1",
+    "n2": "1",
+    "n1": "1"
+  },
+  "grafana_dashboard": "Relay",
+  "grafana_panels": {
+    "Dispatch latency": {
+      "series": 3,
+      "errors": []
+    },
+    "Throughput": {
+      "series": 4,
+      "errors": []
+    },
+    "Queue depth and active leases": {
+      "series": 2,
+      "errors": []
+    },
+    "Queue wait": {
+      "series": 2,
+      "errors": []
+    },
+    "Lease expirations and reassignments": {
+      "series": 3,
+      "errors": []
+    },
+    "Stale completions rejected (fencing)": {
+      "series": 1,
+      "errors": []
+    },
+    "Raft commit latency": {
+      "series": 2,
+      "errors": []
+    },
+    "Leadership": {
+      "series": 4,
+      "errors": []
+    },
+    "Store acquire RTT": {
+      "series": 2,
+      "errors": []
+    },
+    "Coordinators up": {
+      "series": 5,
+      "errors": []
+    }
+  }
+}
