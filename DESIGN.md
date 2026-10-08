@@ -238,7 +238,7 @@ partitions, and full-cluster restarts while leases are live.
 | Unit tests | every Lua script and every FSM command, with `-race` |
 | Store conformance suite (`internal/store/storetest`) | 14 behavioral tests run unchanged against Redis, a 1-node Raft cluster and a 3-node Raft cluster |
 | Raft tests | byte-identical replicas and log replay; snapshot install after compaction; full-cluster restart; failover with fencing; minority leader; membership changes |
-| Integration (`test/integration`) | real containers: worker kill and pause, coordinator restart, idempotency, retries, Raft leader kill, membership via relayctl |
+| Integration (`test/integration`) | real containers: worker kill and pause, coordinator restart, idempotency, retries, Raft leader kill, follower redirect (NOT_LEADER naming the leader, followed by the cluster client), minority leader (both followers paused: no write acknowledged, steps down, recovers), membership via relayctl |
 | Chaos (`cmd/relay-chaos`, `internal/check`) | seeded faults against real clusters; Jepsen-style histories; invariants plus per-job linearizability (porcupine) |
 | Deliberate bug (`relay_nofence`) | the checker flags fencing violations and non-linearizable histories on both backends |
 
@@ -493,8 +493,10 @@ minutes in the backlog, so each zombie report arrived while its job was
 PENDING, and Lua rejects those even without the token check. The test
 therefore uses 3 submits/s of 3–6s jobs, so a requeued job is re-leased
 at once and the zombie reports while the new lease is live. With that
-workload the checker flags 14 fencing violations and 9 non-linearizable
-jobs, and every other invariant stays clean. That makes it a precise
+workload the checker flags fencing violations and non-linearizable jobs,
+and every other invariant stays clean. The counts vary with timing: the
+recorded run (`bench/results/verification-c302e0f.txt`) flagged 10 and 5
+on Redis and 10 and 7 on Raft. That makes it a precise
 detector, not a noisy one. `test/chaos/nofence_test.go` runs this
 automatically.
 
@@ -678,6 +680,14 @@ default resource and the pinned semconv version disagreed. Unit tests
 never set an endpoint, so they missed it. The fix is a schemaless
 service-name resource, and `TestSetupWithEndpoint` now exercises the real
 exporter path.
+
+**Verified end to end.** Against `make up` at `c302e0f`, a fail-n-times job
+(n=1, max 3) produced one Jaeger trace holding SubmitJob → relay.enqueue →
+two relay.dispatch → relay.execute branches (FailJob, then CompleteJob),
+spanning the coordinator and worker services. Prometheus scraped all three
+coordinators, and every panel of the provisioned Grafana dashboard
+returned data through Grafana's query API, with no errors. The record is
+in `bench/results/verification-c302e0f.txt`.
 
 ### D8. Comparative benchmark methodology (M5)
 

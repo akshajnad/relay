@@ -99,8 +99,9 @@ open http://localhost:3000  # Grafana "Relay" dashboard; traces at http://localh
 make down
 
 make test                   # unit tests, Store conformance on both backends (-race)
-make integration            # container failure tests, Raft failover and membership, chaos self-tests
+make integration            # container failure tests, Raft failover, redirect, minority leader, membership, chaos self-tests
 make chaos SEED=1           # 5-minute seeded chaos run on Raft (BACKEND=redis for Redis)
+make chaos-sweep            # 20 seeds x 5 min on a pinned image, summarized into bench/results/chaos-sweep-$BACKEND.json (~2h)
 make bench                  # Relay-Redis vs Relay-Raft vs asynq (~1.5h; see BENCH_ARGS in the Makefile)
 ```
 
@@ -151,8 +152,11 @@ harness (minus the leader faults; Redis itself is never faulted,
 removes the token check from both backends. `make integration` runs that
 build under worker pauses and partitions, and asserts the checker reports
 fencing violations and non-linearizable jobs, with visualizations, while
-every other invariant stays clean. Across the runs so far, each one flagged 12–19 fencing
-violations and 9–10 non-linearizable jobs. Building the harness found
+every other invariant stays clean. The recorded run
+([`bench/results/verification-c302e0f.txt`](bench/results/verification-c302e0f.txt))
+flagged 10 fencing violations and 5 non-linearizable jobs on Redis, and
+10 and 7 on Raft; the exact counts vary with timing from run to run.
+Building the harness found
 three real problems, all in the harness itself, each fixed at the root
 and recorded in [DESIGN §12](DESIGN.md#12-decision-log):
 - a final-snapshot race (fixed with a freeze hand-off)
