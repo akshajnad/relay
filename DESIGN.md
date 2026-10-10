@@ -242,48 +242,80 @@ partitions, and full-cluster restarts while leases are live.
 | Chaos (`cmd/relay-chaos`, `internal/check`) | seeded faults against real clusters; Jepsen-style histories; invariants plus per-job linearizability (porcupine) |
 | Deliberate bug (`relay_nofence`) | the checker flags fencing violations and non-linearizable histories on both backends |
 
-**Chaos sweep.** On the Raft backend, the sweep ran relay-chaos for 5
-minutes per seed with every fault kind enabled: worker kill, pause and
-partition; coordinator kill, pause, restart, client isolation and backend
-partition; leader kill, pause and partition (minority side); full-cluster
-restart; and Toxiproxy latency. Results: all 20 seeds pass (1–20), with zero invariant violations. The
-binary was commit `373990c`, run as image `relay:sweep-m3`.
+**Chaos sweep.** Each sweep runs relay-chaos for 5 minutes per seed, seeds
+1–20, on one pinned image (`make chaos-sweep`), and `relay-chaos summarize`
+folds the saved artifacts into `bench/results/chaos-sweep-<backend>.json`.
+On Raft every fault kind is enabled: worker kill, pause and partition;
+coordinator kill, pause, restart, client isolation and backend partition;
+leader kill, pause and partition (minority side); full-cluster restart;
+and Toxiproxy latency. On Redis the same harness runs without the leader
+and full-cluster faults (Redis itself is never faulted, §8). Both sweeps
+ran at commit `c302e0f` (image `relay:sweep-c302e0f`, revision recorded in
+the JSON). **All 40 seed runs pass, with zero invariant violations.**
 
-| Totals | |
-|---|---|
-| jobs acknowledged and checked | 158,273 |
-| recorded operations | 1,145,068 (38,247 indeterminate) |
-| faults injected | 1,100: 59 leader kills, 66 leader partitions, 58 leader pauses, 52 full-cluster restarts, 405 other coordinator faults, 360 worker faults, 100 latency windows |
-| leader elections (including restarts) | 379 |
-| stale reports rejected by fencing | 2,305 |
-| NOT_LEADER redirects followed | 65,458 |
-| fencing checks performed by the checker | 426,166 |
+| Totals | Raft | Redis |
+|---|---|---|
+| jobs acknowledged and checked | 158,495 | 103,758 |
+| recorded operations | 1,155,170 (40,550 indeterminate) | 979,836 (82,141 indeterminate) |
+| faults injected | 1,100: 59 leader kills, 66 leader partitions, 58 leader pauses, 52 full-cluster restarts, 405 other coordinator faults, 360 worker faults, 100 latency windows | 1,181: 537 coordinator faults, 501 worker faults, 143 latency windows |
+| leader elections (including restarts) | 396 | n/a |
+| stale reports rejected by fencing | 2,395 | 4,347 |
+| NOT_LEADER redirects followed | 67,441 | n/a |
+| fencing checks performed by the checker | 426,511 | 279,061 |
+
+Raft, per seed:
 
 | seed | jobs | ops | faults | elections | stale rejected | violations |
 |---|---|---|---|---|---|---|
-| 1 | 8,777 | 62,272 | 60 | 18 | 97 | 0 |
-| 2 | 7,538 | 57,243 | 52 | 21 | 155 | 0 |
-| 3 | 6,819 | 51,194 | 56 | 22 | 81 | 0 |
-| 4 | 8,892 | 66,034 | 56 | 14 | 121 | 0 |
-| 5 | 7,723 | 55,565 | 49 | 21 | 116 | 0 |
-| 6 | 7,468 | 52,842 | 55 | 25 | 148 | 0 |
-| 7 | 7,707 | 61,568 | 60 | 18 | 123 | 0 |
-| 8 | 7,066 | 52,903 | 50 | 22 | 228 | 0 |
-| 9 | 8,093 | 58,146 | 59 | 18 | 109 | 0 |
-| 10 | 8,190 | 59,411 | 54 | 21 | 92 | 0 |
-| 11 | 7,902 | 57,135 | 61 | 21 | 78 | 0 |
-| 12 | 8,059 | 56,977 | 59 | 18 | 71 | 0 |
-| 13 | 6,969 | 50,915 | 49 | 21 | 144 | 0 |
-| 14 | 8,502 | 63,734 | 53 | 18 | 110 | 0 |
-| 15 | 7,420 | 52,653 | 52 | 18 | 125 | 0 |
-| 16 | 7,153 | 51,027 | 59 | 18 | 149 | 0 |
-| 17 | 7,796 | 55,265 | 56 | 18 | 107 | 0 |
-| 18 | 8,987 | 61,652 | 52 | 16 | 53 | 0 |
-| 19 | 8,171 | 56,548 | 57 | 16 | 115 | 0 |
-| 20 | 9,041 | 61,984 | 51 | 15 | 83 | 0 |
+| 1 | 9,346 | 68,578 | 60 | 16 | 67 | 0 |
+| 2 | 7,877 | 56,212 | 52 | 20 | 137 | 0 |
+| 3 | 7,433 | 54,161 | 56 | 23 | 101 | 0 |
+| 4 | 9,041 | 71,986 | 56 | 16 | 100 | 0 |
+| 5 | 8,037 | 56,508 | 49 | 19 | 119 | 0 |
+| 6 | 7,955 | 55,739 | 55 | 25 | 175 | 0 |
+| 7 | 7,979 | 60,051 | 60 | 18 | 120 | 0 |
+| 8 | 7,049 | 54,691 | 50 | 24 | 209 | 0 |
+| 9 | 9,137 | 65,270 | 59 | 17 | 138 | 0 |
+| 10 | 7,422 | 55,282 | 54 | 24 | 82 | 0 |
+| 11 | 7,314 | 54,302 | 61 | 23 | 57 | 0 |
+| 12 | 7,324 | 54,075 | 59 | 20 | 95 | 0 |
+| 13 | 8,306 | 57,638 | 49 | 18 | 141 | 0 |
+| 14 | 8,111 | 61,229 | 53 | 18 | 121 | 0 |
+| 15 | 6,578 | 47,910 | 52 | 17 | 134 | 0 |
+| 16 | 6,742 | 49,725 | 59 | 23 | 182 | 0 |
+| 17 | 7,750 | 54,639 | 56 | 18 | 148 | 0 |
+| 18 | 8,535 | 59,514 | 52 | 17 | 85 | 0 |
+| 19 | 8,587 | 59,438 | 57 | 19 | 120 | 0 |
+| 20 | 7,972 | 58,222 | 51 | 21 | 64 | 0 |
 
-Raw per-seed numbers are in `bench/results/chaos-sweep-raft.json`.
-Reproduce a seed with `make chaos SEED=n`.
+Redis, per seed:
+
+| seed | jobs | ops | faults | stale rejected | violations |
+|---|---|---|---|---|---|
+| 1 | 4,732 | 35,247 | 60 | 228 | 0 |
+| 2 | 6,284 | 56,180 | 56 | 252 | 0 |
+| 3 | 5,276 | 41,890 | 56 | 281 | 0 |
+| 4 | 5,521 | 87,824 | 62 | 153 | 0 |
+| 5 | 4,871 | 45,611 | 60 | 312 | 0 |
+| 6 | 4,746 | 37,738 | 58 | 195 | 0 |
+| 7 | 4,853 | 37,717 | 56 | 204 | 0 |
+| 8 | 5,374 | 38,375 | 54 | 200 | 0 |
+| 9 | 5,499 | 39,883 | 56 | 173 | 0 |
+| 10 | 5,558 | 57,239 | 59 | 203 | 0 |
+| 11 | 4,466 | 48,102 | 66 | 244 | 0 |
+| 12 | 4,754 | 36,687 | 60 | 180 | 0 |
+| 13 | 5,534 | 65,833 | 56 | 233 | 0 |
+| 14 | 4,899 | 50,383 | 58 | 232 | 0 |
+| 15 | 5,162 | 55,439 | 57 | 202 | 0 |
+| 16 | 4,124 | 31,892 | 62 | 281 | 0 |
+| 17 | 4,554 | 35,504 | 65 | 188 | 0 |
+| 18 | 6,911 | 57,887 | 60 | 213 | 0 |
+| 19 | 4,578 | 42,145 | 61 | 227 | 0 |
+| 20 | 6,062 | 78,260 | 59 | 146 | 0 |
+
+The M3 Raft sweep (commit `373990c`, image `relay:sweep-m3`; 158,273 jobs,
+0 violations) is kept as `bench/results/chaos-sweep-raft-373990c.json`.
+Reproduce a seed with `make chaos SEED=n` (add `BACKEND=redis` for Redis).
 
 ## 10. Alternatives considered
 
@@ -521,7 +553,8 @@ single inverted op.
 
 ### D6. Raft integration (M3)
 
-*Verification:* the 20-seed sweep in §9, with zero violations.
+*Verification:* the 20-seed Raft sweeps in §9 (at `373990c` and again at
+`c302e0f`), both with zero violations.
 
 **Library.** `hashicorp/raft` with `raft-boltdb/v2` (bbolt) for the log
 and stable store, and file snapshots. Writing Raft from scratch was

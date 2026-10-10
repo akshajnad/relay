@@ -137,16 +137,18 @@ It heals everything, waits for quiescence, freezes the workers, and checks:
 A failing run saves the history and a Porcupine visualization, and the
 same seed reproduces the same fault schedule.
 
-**Results.** On the Raft backend, **20 seeds × 5 minutes, every fault kind: 0
-violations.** That is 158,273 jobs and 1,145,068 recorded operations
-under 1,100 injected faults, including 59 leader
-kills, 66 minority-side leader partitions and
-52 full-cluster restarts. There were 379
-leader elections, and 2,305 zombie reports were fenced out.
-Per-seed numbers are in [DESIGN §9](DESIGN.md#9-verification) and
-`bench/results/chaos-sweep-raft.json`. The Redis backend passes the same
-harness (minus the leader faults; Redis itself is never faulted,
-[DESIGN §8](DESIGN.md#8-failure-modes)).
+**Results.** Every fault kind, 20 seeds × 5 minutes per backend, on one
+pinned image at commit `c302e0f`: **40 of 40 seed runs pass, with 0
+violations.** On Raft that is 158,495 jobs and 1,155,170 recorded
+operations under 1,100 injected faults, including 59 leader kills, 66
+minority-side leader partitions and 52 full-cluster restarts. There were
+396 leader elections, and 2,395 zombie reports were fenced out. On Redis
+(the same harness without the leader faults, since Redis itself is never faulted,
+[DESIGN §8](DESIGN.md#8-failure-modes)) it is 103,758 jobs and 979,836
+operations under 1,181 faults, with 4,347 zombie reports fenced out.
+Per-seed numbers are in [DESIGN §9](DESIGN.md#9-verification),
+[`bench/results/chaos-sweep-raft.json`](bench/results/chaos-sweep-raft.json)
+and [`bench/results/chaos-sweep-redis.json`](bench/results/chaos-sweep-redis.json).
 
 **The checker catches real bugs.** Building with `-tags relay_nofence`
 removes the token check from both backends. `make integration` runs that
