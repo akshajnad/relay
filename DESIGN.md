@@ -352,8 +352,8 @@ error in that tracking turns into overload or idling, plus a delivery
 protocol on top. With *pull* (long-poll), a worker asks only when it has a
 free slot, so capacity is implicit and backpressure is free. The cost is
 the wake-up path, which the FIFO notifier makes cheap: one wake per job,
-no lost wake-ups. On Redis, measured dispatch latency is 0.52 ms p50 and
-0.96 ms p99 (README, Benchmarks).
+no lost wake-ups. On Redis, measured dispatch latency is 0.34 ms p50 and
+0.66 ms p99 (README, Benchmarks).
 On Raft, an acquire costs a log commit, which push would also pay.
 
 **Replicating heartbeats** (lease deadlines in the FSM). This is simpler
@@ -400,7 +400,7 @@ debuggable fact.
   not change.
 - **Relay re-runs more work than asynq under short pauses.** Detecting
   failure in 3s means a worker stalled for 5s has its jobs reassigned
-  while it is still running them: 45 duplicate executions against
+  while it is still running them: 47 duplicate executions against
   asynq's 8 in the fault benchmark. Fencing keeps every duplicate from
   becoming a second completion. A longer `missed-heartbeats` trades
   recovery time for fewer re-runs.
@@ -765,3 +765,13 @@ by DNS name, killed nodes are always restarted, and the host client is
 re-dialled for every phase. The partial results were discarded and the
 whole benchmark was rerun, so that every number comes from one
 consistent run.
+
+**Re-measured at `547dd3a`.** The README's numbers now come from
+`compare-20261027T033746Z`. That run adds recovery and fault phases for
+asynq-tuned and records the image's git revision. The M5 run
+(`compare-20261026T085821Z`) is kept for reference. Throughput is about
+30% higher for every backend in the new run, so the ratios between
+backends barely moved. The new run had a quieter host, after a
+crash-looping background process was stopped, which suggests why. Two
+earlier attempts were discarded rather than patched: in one the host
+slept, and in the other Docker Desktop quit mid-run.

@@ -70,7 +70,7 @@ chaos-sweep: image
 	go run ./cmd/relay-chaos summarize --out bench/results/chaos-sweep-$(BACKEND).json $(SWEEP_OUT)/$(BACKEND)-seed*; \
 	exit $$failed
 
-## bench: comparative benchmark, Relay-Redis vs Relay-Raft vs asynq (~1.5h;
+## bench: comparative benchmark, Relay-Redis vs Relay-Raft vs asynq (~2.5h;
 ##        BENCH_ARGS="--trials 5 --sat-jobs 5000" for a quick look)
 bench: image
 	go run ./cmd/relay-bench compare $(BENCH_ARGS)

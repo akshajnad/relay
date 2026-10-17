@@ -1,0 +1,672 @@
+{
+  "started_at": "2026-10-27T03:37:46.634302Z",
+  "finished_at": "2026-10-27T06:10:17.675338Z",
+  "host": {
+    "os": "macOS 26.6.2",
+    "arch": "arm64",
+    "cpu": "Apple M4 Pro",
+    "cores": 14,
+    "memory_gb": "24",
+    "go_version": "go1.26.1"
+  },
+  "docker": {
+    "server_version": "29.9.2",
+    "operating_system": "Docker Desktop",
+    "kernel_version": "7.0.14-linuxkit",
+    "cpus": 14,
+    "memory_gb": 7.7
+  },
+  "image": {
+    "ref": "relay:dev",
+    "id": "sha256:c387733fc80389f8b1a7dbf2a3b46060302bb98c8e2c26b031444052144b5edd",
+    "revision": "547dd3a742c1e957d44dc86c8eb6c7cb0a1b5d44",
+    "created": "2026-10-27T03:15:01.992409711Z"
+  },
+  "config": {
+    "backends": [
+      "relay-redis",
+      "relay-raft",
+      "asynq",
+      "asynq-tuned"
+    ],
+    "phases": [
+      "saturate",
+      "latency",
+      "recovery",
+      "failover",
+      "faults"
+    ],
+    "image": "relay:dev",
+    "compose_file": "deploy/docker-compose.bench.yml",
+    "saturation_jobs": 20000,
+    "saturation_workers": 10,
+    "saturation_concurrency": 10,
+    "latency_rate_per_sec": 500,
+    "latency_jobs": 30000,
+    "latency_sleep_ms": 20,
+    "trials": 30,
+    "trial_workers": 4,
+    "trial_concurrency": 2,
+    "fault_duration": "2m",
+    "fault_submit_rate": 20,
+    "seed": 1
+  },
+  "results": [
+    {
+      "backend": {
+        "name": "relay-redis",
+        "description": "Relay, Redis store, 1 coordinator",
+        "timings": {
+          "heartbeat_interval": "1s",
+          "lease_duration": "10s",
+          "missed_heartbeats": "3 (worker declared dead after 3s)",
+          "poll_timeout": "5s"
+        }
+      },
+      "saturation": {
+        "jobs": 20000,
+        "workers": 10,
+        "slots": 100,
+        "duration_sec": 1.220424417,
+        "jobs_per_sec": 16387.74160972887,
+        "completed_jobs": 20000
+      },
+      "latency": {
+        "rate_per_sec": 500,
+        "jobs": 30000,
+        "sleep_ms": 20,
+        "dispatch_external": {
+          "count": 30000,
+          "mean_ms": 0.36,
+          "p50_ms": 0.337,
+          "p90_ms": 0.436,
+          "p95_ms": 0.485,
+          "p99_ms": 0.656,
+          "max_ms": 4.302,
+          "min_ms": 0.201
+        },
+        "queue_wait_end_to_end": {
+          "count": 30000,
+          "mean_ms": 0.36,
+          "p50_ms": 0.337,
+          "p90_ms": 0.436,
+          "p95_ms": 0.485,
+          "p99_ms": 0.656,
+          "max_ms": 4.302,
+          "min_ms": 0.201
+        },
+        "submit_rtt": {
+          "count": 30000,
+          "mean_ms": 0.242,
+          "p50_ms": 0.222,
+          "p90_ms": 0.298,
+          "p95_ms": 0.343,
+          "p99_ms": 0.484,
+          "max_ms": 4.131,
+          "min_ms": 0.142
+        },
+        "dispatch_internal": {
+          "count": 30000,
+          "mean_ms": 0.18297373333333347,
+          "p50_ms": 0.094,
+          "p90_ms": 0.174,
+          "p95_ms": 1.09,
+          "p99_ms": 1.132,
+          "p999_ms": 1.236,
+          "max_ms": 3.147,
+          "min_ms": 0.04
+        },
+        "queue_wait_internal": {
+          "count": 30000,
+          "mean_ms": 0.08611500000000001,
+          "p50_ms": 0.001,
+          "p90_ms": 0.001,
+          "p95_ms": 1,
+          "p99_ms": 1,
+          "p999_ms": 1,
+          "max_ms": 3.001,
+          "min_ms": 0.001
+        }
+      },
+      "worker_recovery": {
+        "trials": 30,
+        "seconds": [
+          2.825929252,
+          2.781000377,
+          2.845903168,
+          2.805432502,
+          2.790285168,
+          2.814626196,
+          2.849181168,
+          2.836204418,
+          2.812545877,
+          3.812159335,
+          2.796136251,
+          3.759204252,
+          2.761806501,
+          2.8408671119999998,
+          2.813141835,
+          2.80270846,
+          2.843310835,
+          2.762914793,
+          2.763601584,
+          2.844537252,
+          2.792275376,
+          2.792519751,
+          2.814449377,
+          3.7503023349999998,
+          2.836828668,
+          3.730526543,
+          2.82530196,
+          3.751498044,
+          2.833057834,
+          3.735705362
+        ],
+        "dist": {
+          "count": 30,
+          "mean_ms": 3000.798,
+          "p50_ms": 2825.301,
+          "p90_ms": 3750.302,
+          "p95_ms": 3759.204,
+          "p99_ms": 3812.159,
+          "max_ms": 3812.159,
+          "min_ms": 2761.806
+        },
+        "method": "docker kill of a worker holding jobs (container FinishedAt, VM clock) -\u003e the last of its jobs starts on another worker (handler start note, VM wall clock)"
+      },
+      "faults": {
+        "duration_sec": 120,
+        "faults": [
+          "t+5.8s pause 5adbb81f6bdf for 5.9s",
+          "t+12.0s kill aa370d4939b5 for 6.4s",
+          "t+19.9s pause f7bb21b8b24e for 9.2s",
+          "t+23.8s partition aa370d4939b5 for 4.6s",
+          "t+29.7s pause aa370d4939b5 for 8.1s",
+          "t+34.6s partition 41efbbd61176 for 9s",
+          "t+38.0s kill 5adbb81f6bdf for 8.4s",
+          "t+47.1s kill f7bb21b8b24e for 3.2s",
+          "t+52.4s pause aa370d4939b5 for 9s",
+          "t+56.7s partition f7bb21b8b24e for 3.5s",
+          "t+63.3s partition f7bb21b8b24e for 3.3s",
+          "t+69.4s pause aa370d4939b5 for 3s",
+          "t+73.5s kill f7bb21b8b24e for 8.9s",
+          "t+78.1s pause 5adbb81f6bdf for 8.9s",
+          "t+85.3s partition aa370d4939b5 for 4.3s",
+          "t+90.6s pause f7bb21b8b24e for 4.6s",
+          "t+94.8s pause aa370d4939b5 for 9.8s",
+          "t+107.9s partition 41efbbd61176 for 7.1s"
+        ],
+        "acked_jobs": 2456,
+        "lost_jobs": 0,
+        "unfinished_jobs": 0,
+        "duplicate_executions": 47,
+        "duplicate_terminal_transitions": 0,
+        "succeeded": 2456,
+        "dead": 0
+      }
+    },
+    {
+      "backend": {
+        "name": "relay-raft",
+        "description": "Relay, Raft store, 3 coordinators",
+        "timings": {
+          "heartbeat_interval": "1s",
+          "lease_duration": "10s",
+          "missed_heartbeats": "3 (worker declared dead after 3s)",
+          "poll_timeout": "5s",
+          "raft_election_timeout": "1s",
+          "raft_heartbeat_timeout": "1s",
+          "raft_leader_lease_timeout": "500ms",
+          "raft_storage": "raft-boltdb (bbolt), fsync per batch"
+        }
+      },
+      "saturation": {
+        "jobs": 20000,
+        "workers": 10,
+        "slots": 100,
+        "duration_sec": 4.434043877,
+        "jobs_per_sec": 4510.5552752291815,
+        "completed_jobs": 20000
+      },
+      "latency": {
+        "rate_per_sec": 500,
+        "jobs": 30000,
+        "sleep_ms": 20,
+        "dispatch_external": {
+          "count": 30000,
+          "mean_ms": 3.854,
+          "p50_ms": 3.115,
+          "p90_ms": 5.784,
+          "p95_ms": 7.432,
+          "p99_ms": 13.76,
+          "max_ms": 97.996,
+          "min_ms": 1.094
+        },
+        "queue_wait_end_to_end": {
+          "count": 30000,
+          "mean_ms": 3.854,
+          "p50_ms": 3.115,
+          "p90_ms": 5.784,
+          "p95_ms": 7.432,
+          "p99_ms": 13.76,
+          "max_ms": 97.996,
+          "min_ms": 1.094
+        },
+        "submit_rtt": {
+          "count": 30000,
+          "mean_ms": 2.342,
+          "p50_ms": 1.78,
+          "p90_ms": 3.672,
+          "p95_ms": 4.844,
+          "p99_ms": 9.276,
+          "max_ms": 90.409,
+          "min_ms": 0.6
+        },
+        "dispatch_internal": {
+          "count": 30000,
+          "mean_ms": 3.312770966666668,
+          "p50_ms": 2.751,
+          "p90_ms": 5.343,
+          "p95_ms": 6.831,
+          "p99_ms": 12.415,
+          "p999_ms": 46.943,
+          "max_ms": 90.751,
+          "min_ms": 0.46
+        },
+        "queue_wait_internal": {
+          "count": 30000,
+          "mean_ms": 1.4741242333333326,
+          "p50_ms": 1,
+          "p90_ms": 2,
+          "p95_ms": 3.001,
+          "p99_ms": 6.003,
+          "p999_ms": 27.007,
+          "max_ms": 85.055,
+          "min_ms": 0.001
+        }
+      },
+      "worker_recovery": {
+        "trials": 30,
+        "seconds": [
+          3.64558746,
+          3.775637086,
+          3.799829779,
+          3.741798294,
+          2.839933251,
+          2.786728668,
+          2.7315274179999998,
+          3.82415296,
+          2.79295471,
+          2.766948335,
+          3.764662112,
+          2.81000696,
+          3.7601771680000002,
+          3.776867002,
+          2.771762335,
+          3.737239445,
+          2.8331702930000002,
+          3.738659252,
+          2.832356418,
+          2.776897043,
+          3.754246169,
+          2.810115793,
+          2.830895543,
+          3.789468154,
+          2.808976418,
+          3.764831252,
+          2.848550877,
+          3.789707377,
+          2.798677835,
+          3.7719763349999997
+        ],
+        "dist": {
+          "count": 30,
+          "mean_ms": 3282.478,
+          "p50_ms": 2848.55,
+          "p90_ms": 3789.468,
+          "p95_ms": 3799.829,
+          "p99_ms": 3824.152,
+          "max_ms": 3824.152,
+          "min_ms": 2731.527
+        },
+        "method": "docker kill of a worker holding jobs (container FinishedAt, VM clock) -\u003e the last of its jobs starts on another worker (handler start note, VM wall clock)"
+      },
+      "leader_failover": {
+        "trials": 30,
+        "seconds": [
+          2.511053752,
+          2.58134546,
+          2.117412793,
+          2.379203543,
+          2.368544793,
+          1.941039459,
+          2.038855542,
+          2.663287377,
+          2.4414389180000002,
+          2.226393626,
+          1.380893876,
+          2.715971668,
+          1.274419751,
+          2.274398279,
+          1.961453042,
+          2.067661209,
+          2.447861835,
+          2.121419876,
+          3.210412168,
+          2.412346904,
+          2.975132043,
+          2.686428835,
+          2.240121667,
+          2.482659668,
+          2.116510001,
+          2.142321751,
+          2.379400043,
+          2.29157771,
+          2.122047501,
+          2.29662546
+        ],
+        "dist": {
+          "count": 30,
+          "mean_ms": 2295.607,
+          "p50_ms": 2291.577,
+          "p90_ms": 2686.428,
+          "p95_ms": 2975.132,
+          "p99_ms": 3210.412,
+          "max_ms": 3210.412,
+          "min_ms": 1274.419
+        },
+        "method": "docker kill of the Raft leader (container FinishedAt, VM clock) -\u003e first AcquireJob invoked after the kill that returns a job (worker history, VM wall clock)"
+      },
+      "faults": {
+        "duration_sec": 120,
+        "faults": [
+          "t+5.8s pause 34543b663521 for 5.9s",
+          "t+11.9s kill 50f0603ce5c9 for 6.4s",
+          "t+19.9s pause 901e82941c1e for 9.2s",
+          "t+23.8s partition 50f0603ce5c9 for 4.6s",
+          "t+29.7s pause 50f0603ce5c9 for 8.1s",
+          "t+34.6s partition 0d9b43550edc for 9s",
+          "t+38.1s kill 34543b663521 for 8.4s",
+          "t+47.1s kill 901e82941c1e for 3.2s",
+          "t+52.4s pause 50f0603ce5c9 for 9s",
+          "t+56.7s partition 901e82941c1e for 3.5s",
+          "t+63.3s partition 901e82941c1e for 3.3s",
+          "t+69.4s pause 50f0603ce5c9 for 3s",
+          "t+73.5s kill 901e82941c1e for 8.9s",
+          "t+78.1s pause 34543b663521 for 8.9s",
+          "t+85.3s partition 50f0603ce5c9 for 4.3s",
+          "t+90.6s pause 901e82941c1e for 4.6s",
+          "t+94.8s pause 50f0603ce5c9 for 9.8s",
+          "t+107.8s partition 0d9b43550edc for 7.1s"
+        ],
+        "acked_jobs": 2456,
+        "lost_jobs": 0,
+        "unfinished_jobs": 0,
+        "duplicate_executions": 48,
+        "duplicate_terminal_transitions": 0,
+        "succeeded": 2456,
+        "dead": 0
+      }
+    },
+    {
+      "backend": {
+        "name": "asynq",
+        "description": "hibiken/asynq v0.26.0, Redis, default config",
+        "timings": {
+          "lease_duration": "30s (asynq constant, extended by heartbeats)",
+          "recoverer_interval": "1m (asynq constant)",
+          "task_check_interval": "1s (default)"
+        }
+      },
+      "saturation": {
+        "jobs": 20000,
+        "workers": 10,
+        "slots": 100,
+        "duration_sec": 1.191849876,
+        "jobs_per_sec": 16780.636892896735,
+        "completed_jobs": 20000
+      },
+      "latency": {
+        "rate_per_sec": 500,
+        "jobs": 30000,
+        "sleep_ms": 20,
+        "dispatch_external": {
+          "count": 30000,
+          "mean_ms": 19.582,
+          "p50_ms": 0.895,
+          "p90_ms": 63.28,
+          "p95_ms": 156.908,
+          "p99_ms": 294.748,
+          "max_ms": 482.241,
+          "min_ms": 0.151
+        },
+        "queue_wait_end_to_end": {
+          "count": 30000,
+          "mean_ms": 103.88,
+          "p50_ms": 77.523,
+          "p90_ms": 231.733,
+          "p95_ms": 279.711,
+          "p99_ms": 369.337,
+          "max_ms": 490.164,
+          "min_ms": 0.204
+        },
+        "submit_rtt": {
+          "count": 30000,
+          "mean_ms": 0.216,
+          "p50_ms": 0.187,
+          "p90_ms": 0.249,
+          "p95_ms": 0.344,
+          "p99_ms": 0.936,
+          "max_ms": 6.503,
+          "min_ms": 0.072
+        }
+      },
+      "worker_recovery": {
+        "trials": 30,
+        "seconds": [
+          154.468616669,
+          111.127623913,
+          116.383953456,
+          106.359731299,
+          116.263307748,
+          112.116181802,
+          111.015835635,
+          106.973996216,
+          116.426672164,
+          96.681407128,
+          111.20182837,
+          96.358952086,
+          141.382179969,
+          91.528060668,
+          126.258805837,
+          116.223732665,
+          111.625611552,
+          102.118039255,
+          120.526869751,
+          100.889862755,
+          111.94336783,
+          121.622377209,
+          101.973011839,
+          101.65229545,
+          101.427090505,
+          96.547348795,
+          136.36115941,
+          101.695306755,
+          96.154013503,
+          107.337297369
+        ],
+        "dist": {
+          "count": 30,
+          "mean_ms": 111421.484,
+          "p50_ms": 111015.835,
+          "p90_ms": 126258.805,
+          "p95_ms": 141382.179,
+          "p99_ms": 154468.616,
+          "max_ms": 154468.616,
+          "min_ms": 91528.06
+        },
+        "method": "docker kill of a worker holding jobs (container FinishedAt, VM clock) -\u003e the last of its jobs starts on another worker (handler start note, VM wall clock)"
+      },
+      "faults": {
+        "duration_sec": 120,
+        "faults": [
+          "t+5.8s pause ea8f13287fe7 for 5.9s",
+          "t+12.0s kill eceeebb2de75 for 6.4s",
+          "t+19.9s pause fe370553846d for 9.2s",
+          "t+23.8s partition eceeebb2de75 for 4.6s",
+          "t+29.7s pause eceeebb2de75 for 8.1s",
+          "t+34.6s partition 195fc0d90031 for 9s",
+          "t+38.1s kill ea8f13287fe7 for 8.4s",
+          "t+47.1s kill fe370553846d for 3.2s",
+          "t+52.4s pause eceeebb2de75 for 9s",
+          "t+56.7s partition fe370553846d for 3.5s",
+          "t+63.3s partition fe370553846d for 3.3s",
+          "t+69.4s pause eceeebb2de75 for 3s",
+          "t+73.4s kill fe370553846d for 8.9s",
+          "t+78.0s pause ea8f13287fe7 for 8.9s",
+          "t+85.3s partition eceeebb2de75 for 4.3s",
+          "t+90.6s pause fe370553846d for 4.6s",
+          "t+94.8s pause eceeebb2de75 for 9.8s",
+          "t+107.8s partition 195fc0d90031 for 7.1s"
+        ],
+        "acked_jobs": 2456,
+        "lost_jobs": 0,
+        "unfinished_jobs": 0,
+        "duplicate_executions": 8,
+        "duplicate_terminal_transitions": -1,
+        "succeeded": 2456,
+        "dead": 0
+      }
+    },
+    {
+      "backend": {
+        "name": "asynq-tuned",
+        "description": "hibiken/asynq v0.26.0, Redis, TaskCheckInterval=10ms",
+        "timings": {
+          "lease_duration": "30s (asynq constant)",
+          "recoverer_interval": "1m (asynq constant)",
+          "task_check_interval": "10ms"
+        }
+      },
+      "saturation": {
+        "jobs": 20000,
+        "workers": 10,
+        "slots": 100,
+        "duration_sec": 1.190969709,
+        "jobs_per_sec": 16793.038352581643,
+        "completed_jobs": 20000
+      },
+      "latency": {
+        "rate_per_sec": 500,
+        "jobs": 30000,
+        "sleep_ms": 20,
+        "dispatch_external": {
+          "count": 30000,
+          "mean_ms": 1.16,
+          "p50_ms": 0.953,
+          "p90_ms": 2.441,
+          "p95_ms": 2.967,
+          "p99_ms": 4.236,
+          "max_ms": 7.076,
+          "min_ms": 0.092
+        },
+        "queue_wait_end_to_end": {
+          "count": 30000,
+          "mean_ms": 1.16,
+          "p50_ms": 0.953,
+          "p90_ms": 2.441,
+          "p95_ms": 2.967,
+          "p99_ms": 4.236,
+          "max_ms": 7.076,
+          "min_ms": 0.092
+        },
+        "submit_rtt": {
+          "count": 30000,
+          "mean_ms": 0.119,
+          "p50_ms": 0.105,
+          "p90_ms": 0.151,
+          "p95_ms": 0.202,
+          "p99_ms": 0.301,
+          "max_ms": 5.889,
+          "min_ms": 0.057
+        }
+      },
+      "worker_recovery": {
+        "trials": 30,
+        "seconds": [
+          104.740982882,
+          91.857939445,
+          111.843176663,
+          121.847566459,
+          121.909702959,
+          96.905183905,
+          111.801124038,
+          106.846357702,
+          101.85562063,
+          121.865353126,
+          101.813749673,
+          101.772358756,
+          101.987498449,
+          126.839922254,
+          126.771652406,
+          111.795620413,
+          116.897377874,
+          116.875153956,
+          91.807002459,
+          111.768282302,
+          116.817506305,
+          150.433866089,
+          106.851625702,
+          101.841062617,
+          86.956466415,
+          101.791059589,
+          116.924773248,
+          131.813219047,
+          116.81983168,
+          111.83680501
+        ],
+        "dist": {
+          "count": 30,
+          "mean_ms": 111396.261,
+          "p50_ms": 111795.62,
+          "p90_ms": 126771.652,
+          "p95_ms": 131813.219,
+          "p99_ms": 150433.866,
+          "max_ms": 150433.866,
+          "min_ms": 86956.466
+        },
+        "method": "docker kill of a worker holding jobs (container FinishedAt, VM clock) -\u003e the last of its jobs starts on another worker (handler start note, VM wall clock)"
+      },
+      "faults": {
+        "duration_sec": 120,
+        "faults": [
+          "t+5.8s pause 51c7749a762c for 5.9s",
+          "t+11.9s kill c177bc21b5eb for 6.4s",
+          "t+19.9s pause c78d637245f0 for 9.2s",
+          "t+23.8s partition c177bc21b5eb for 4.6s",
+          "t+29.7s pause c177bc21b5eb for 8.1s",
+          "t+34.6s partition 19fa654b5989 for 9s",
+          "t+38.0s kill 51c7749a762c for 8.4s",
+          "t+47.1s kill c78d637245f0 for 3.2s",
+          "t+52.5s pause c177bc21b5eb for 9s",
+          "t+56.7s partition c78d637245f0 for 3.5s",
+          "t+63.3s partition c78d637245f0 for 3.3s",
+          "t+69.4s pause c177bc21b5eb for 3s",
+          "t+73.5s kill c78d637245f0 for 8.9s",
+          "t+78.1s pause 51c7749a762c for 8.9s",
+          "t+85.4s partition c177bc21b5eb for 4.3s",
+          "t+90.6s pause c78d637245f0 for 4.6s",
+          "t+94.8s pause c177bc21b5eb for 9.8s",
+          "t+107.9s partition 19fa654b5989 for 7.1s"
+        ],
+        "acked_jobs": 2456,
+        "lost_jobs": 0,
+        "unfinished_jobs": 0,
+        "duplicate_executions": 11,
+        "duplicate_terminal_transitions": -1,
+        "succeeded": 2456,
+        "dead": 0
+      }
+    }
+  ]
+}
