@@ -317,12 +317,18 @@ is p50 2.75 / p99 12.41 ms.
 
 ### Relay's coordinator-measured latency
 
-`make bench-relay` runs the original single-backend benchmark (burst,
-steady and preload modes against Relay-Redis, with latency measured by
-the coordinator). Its last result is
-[`bench/results/20261026T053700Z.json`](bench/results/20261026T053700Z.json):
-p95 scheduling latency of 1.69 ms in burst mode, 0.18 ms in steady mode
-and 1.27 ms in preload mode, against a target of 25 ms.
+`make bench-relay BENCH_ARGS="--modes burst,steady,preload"` runs the
+original single-backend benchmark against Relay-Redis, with latency
+measured by the coordinator. Without `BENCH_ARGS` it runs only burst and
+steady. Its last result is
+[`bench/results/20261027T063007Z.json`](bench/results/20261027T063007Z.json),
+image revision `32aa118`. p95 scheduling latency was 1.07 ms in burst
+mode, 0.39 ms in steady mode and 0.55 ms in preload mode, against a
+target of 25 ms. Sub-millisecond p95s here move with the 1 ms resolution
+noted above. A two-mode run a minute earlier measured steady p95 at
+1.16 ms, and the previous result
+([`20261026T053700Z.json`](bench/results/20261026T053700Z.json)) had
+1.69 / 0.18 / 1.27 ms.
 
 ## Observability
 

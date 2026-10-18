@@ -1,0 +1,228 @@
+{
+  "timestamp": "2026-10-27T06:30:07.69566Z",
+  "config": {
+    "compose_file": "deploy/docker-compose.yml",
+    "project": "relay-bench",
+    "manage_cluster": true,
+    "build": true,
+    "down": true,
+    "coordinator": "127.0.0.1:50051",
+    "metrics_addr": "127.0.0.1:9090",
+    "worker_containers": 10,
+    "worker_concurrency": 10,
+    "jobs": 5000,
+    "modes": [
+      "burst",
+      "steady",
+      "preload"
+    ],
+    "steady_rate_per_sec": 2000,
+    "sleep_duration": 20000000,
+    "submitters": 32,
+    "warmup_jobs": 500,
+    "profile": false,
+    "profile_seconds": 5,
+    "out_dir": "bench/results",
+    "run_timeout": 300000000000
+  },
+  "host": {
+    "os": "macOS 26.6.2",
+    "arch": "arm64",
+    "cpu": "Apple M4 Pro",
+    "cores": 14,
+    "memory_gb": "24",
+    "go_version": "go1.26.1"
+  },
+  "docker": {
+    "server_version": "29.9.2",
+    "operating_system": "Docker Desktop",
+    "kernel_version": "7.0.14-linuxkit",
+    "cpus": 14,
+    "memory_gb": 7.7
+  },
+  "image": {
+    "ref": "relay:dev",
+    "id": "sha256:afd632b32cad1af221645e25eeccc6f07e7c5f860622f680f659332baace56ac",
+    "revision": "32aa118ca1424437f3f23b02ba430c58a2d70ef7",
+    "created": "2026-10-27T06:29:16.251071965Z"
+  },
+  "runs": [
+    {
+      "mode": "burst",
+      "jobs": 5000,
+      "submit_seconds": 0.200108083,
+      "makespan_seconds": 1.0965675,
+      "throughput_jobs_per_sec": 4559.682828462453,
+      "scheduling_latency": {
+        "count": 5000,
+        "mean_ms": 0.35094159999999985,
+        "p50_ms": 0.227,
+        "p90_ms": 0.727,
+        "p95_ms": 1.074,
+        "p99_ms": 2.331,
+        "p999_ms": 2.987,
+        "max_ms": 3.213,
+        "min_ms": 0.045
+      },
+      "queue_wait": {
+        "count": 5000,
+        "mean_ms": 436.17186260000005,
+        "p50_ms": 434.175,
+        "p90_ms": 781.311,
+        "p95_ms": 827.391,
+        "p99_ms": 862.207,
+        "p999_ms": 868.351,
+        "max_ms": 869.375,
+        "min_ms": 0.001
+      },
+      "acquire_script_rtt": {
+        "count": 5130,
+        "mean_ms": 0.3385397660818709,
+        "p50_ms": 0.221,
+        "p90_ms": 0.732,
+        "p95_ms": 1.061,
+        "p99_ms": 1.945,
+        "p999_ms": 2.669,
+        "max_ms": 2.915,
+        "min_ms": 0.034
+      },
+      "counters": {
+        "submitted": 5000,
+        "duplicates": 0,
+        "leased": 5000,
+        "succeeded": 5000,
+        "retried": 0,
+        "failed": 0,
+        "dead": 0,
+        "stale_rejections": 0,
+        "requeued": 0,
+        "released": 0,
+        "workers_expired": 0,
+        "leader_changes": 0,
+        "lease_expirations": 0
+      }
+    },
+    {
+      "mode": "steady",
+      "jobs": 5000,
+      "submit_seconds": 2.516065084,
+      "makespan_seconds": 2.529693292,
+      "throughput_jobs_per_sec": 1976.5241959616976,
+      "scheduling_latency": {
+        "count": 5000,
+        "mean_ms": 0.20253639999999984,
+        "p50_ms": 0.142,
+        "p90_ms": 0.268,
+        "p95_ms": 0.389,
+        "p99_ms": 1.248,
+        "p999_ms": 1.4,
+        "max_ms": 2.279,
+        "min_ms": 0.042
+      },
+      "queue_wait": {
+        "count": 5000,
+        "mean_ms": 0.054746199999999995,
+        "p50_ms": 0.001,
+        "p90_ms": 0.001,
+        "p95_ms": 1,
+        "p99_ms": 1,
+        "p999_ms": 1,
+        "max_ms": 1,
+        "min_ms": 0.001
+      },
+      "acquire_script_rtt": {
+        "count": 10015,
+        "mean_ms": 0.1481553669495754,
+        "p50_ms": 0.134,
+        "p90_ms": 0.233,
+        "p95_ms": 0.275,
+        "p99_ms": 0.352,
+        "p999_ms": 0.495,
+        "max_ms": 1.278,
+        "min_ms": 0.018
+      },
+      "counters": {
+        "submitted": 5000,
+        "duplicates": 0,
+        "leased": 5000,
+        "succeeded": 5000,
+        "retried": 0,
+        "failed": 0,
+        "dead": 0,
+        "stale_rejections": 0,
+        "requeued": 0,
+        "released": 0,
+        "workers_expired": 0,
+        "leader_changes": 0,
+        "lease_expirations": 0
+      }
+    },
+    {
+      "mode": "preload",
+      "jobs": 5000,
+      "submit_seconds": 0.183951541,
+      "makespan_seconds": 2.5656835,
+      "throughput_jobs_per_sec": 1948.7984390904023,
+      "scheduling_latency": {
+        "count": 5000,
+        "mean_ms": 0.2672882,
+        "p50_ms": 0.244,
+        "p90_ms": 0.448,
+        "p95_ms": 0.551,
+        "p99_ms": 0.801,
+        "p999_ms": 0.982,
+        "max_ms": 1.146,
+        "min_ms": 0.045
+      },
+      "queue_wait": {
+        "count": 5000,
+        "mean_ms": 2077.3691391999996,
+        "p50_ms": 2087.935,
+        "p90_ms": 2449.407,
+        "p95_ms": 2490.367,
+        "p99_ms": 2525.183,
+        "p999_ms": 2539.519,
+        "max_ms": 2539.519,
+        "min_ms": 1442.816
+      },
+      "acquire_script_rtt": {
+        "count": 5103,
+        "mean_ms": 0.26275191064079945,
+        "p50_ms": 0.239,
+        "p90_ms": 0.442,
+        "p95_ms": 0.547,
+        "p99_ms": 0.798,
+        "p999_ms": 0.979,
+        "max_ms": 1.144,
+        "min_ms": 0.021
+      },
+      "counters": {
+        "submitted": 5000,
+        "duplicates": 0,
+        "leased": 5000,
+        "succeeded": 5000,
+        "retried": 0,
+        "failed": 0,
+        "dead": 0,
+        "stale_rejections": 0,
+        "requeued": 0,
+        "released": 0,
+        "workers_expired": 10,
+        "leader_changes": 0,
+        "lease_expirations": 0
+      },
+      "notes": {
+        "makespan": "includes worker container start-up after the queue was filled"
+      }
+    }
+  ],
+  "target": {
+    "description": "p95 scheduling latency \u003c 25ms with 100 worker slots and 5,000 queued jobs",
+    "p95_ms": 25,
+    "met": {
+      "burst": true,
+      "preload": true,
+      "steady": true
+    }
+  }
+}
