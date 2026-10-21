@@ -138,7 +138,7 @@ A failing run saves the history and a Porcupine visualization, and the
 same seed reproduces the same fault schedule.
 
 **Results.** Every fault kind, 20 seeds × 5 minutes per backend, on one
-pinned image at commit `c302e0f`: **40 of 40 seed runs pass, with 0
+pinned image at commit `1b44cba`: **40 of 40 seed runs pass, with 0
 violations.** On Raft that is 158,495 jobs and 1,155,170 recorded
 operations under 1,100 injected faults, including 59 leader kills, 66
 minority-side leader partitions and 52 full-cluster restarts. There were
@@ -155,7 +155,7 @@ removes the token check from both backends. `make integration` runs that
 build under worker pauses and partitions, and asserts the checker reports
 fencing violations and non-linearizable jobs, with visualizations, while
 every other invariant stays clean. The recorded run
-([`bench/results/verification-c302e0f.txt`](bench/results/verification-c302e0f.txt))
+([`bench/results/verification-1b44cba.txt`](bench/results/verification-1b44cba.txt))
 flagged 10 fencing violations and 5 non-linearizable jobs on Redis, and
 10 and 7 on Raft; the exact counts vary with timing from run to run.
 Building the harness found
@@ -170,8 +170,10 @@ and recorded in [DESIGN §12](DESIGN.md#12-decision-log):
 
 All numbers are from one run of `make bench`
 ([`bench/results/compare-20261027T033746Z.json`](bench/results/compare-20261027T033746Z.json),
-charts alongside), on image `relay:dev` built at commit `547dd3a`. The
-results file records the image's revision. The setup:
+charts alongside), on image `relay:dev` built at commit `f0f83e9`. The
+results file records the image's revision; see
+[`bench/results/REVISIONS.md`](bench/results/REVISIONS.md) for how the
+recorded revisions map to commits. The setup:
 - **Hardware:** Apple M4 Pro (14 cores, 24 GB), macOS 26.6.2, go1.26.1.
 - **Container runtime:** Docker Desktop 29.9.2, with
   14 CPUs and 7.7 GB for its VM.
@@ -322,7 +324,7 @@ original single-backend benchmark against Relay-Redis, with latency
 measured by the coordinator. Without `BENCH_ARGS` it runs only burst and
 steady. Its last result is
 [`bench/results/20261027T063007Z.json`](bench/results/20261027T063007Z.json),
-image revision `32aa118`. p95 scheduling latency was 1.07 ms in burst
+image revision `3ccb967`. p95 scheduling latency was 1.07 ms in burst
 mode, 0.39 ms in steady mode and 0.55 ms in preload mode, against a
 target of 25 ms. Sub-millisecond p95s here move with the 1 ms resolution
 noted above. A two-mode run a minute earlier measured steady p95 at
