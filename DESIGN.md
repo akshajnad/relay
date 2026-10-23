@@ -250,7 +250,7 @@ coordinator kill, pause, restart, client isolation and backend partition;
 leader kill, pause and partition (minority side); full-cluster restart;
 and Toxiproxy latency. On Redis the same harness runs without the leader
 and full-cluster faults (Redis itself is never faulted, §8). Both sweeps
-ran at commit `1b44cba` (image `relay:sweep-c302e0f`; the JSON records that revision,
+ran at commit `a6b5444` (image `relay:sweep-c302e0f`; the JSON records that revision,
 mapped in `bench/results/REVISIONS.md`). **All 40 seed runs pass, with zero invariant violations.**
 
 | Totals | Raft | Redis |
@@ -313,8 +313,8 @@ Redis, per seed:
 | 19 | 4,578 | 42,145 | 61 | 227 | 0 |
 | 20 | 6,062 | 78,260 | 59 | 146 | 0 |
 
-The M3 Raft sweep (commit `3de8a34`, image `relay:sweep-m3`; 158,273 jobs,
-0 violations) is kept as `bench/results/chaos-sweep-raft-3de8a34.json`.
+The M3 Raft sweep (commit `102436f`, image `relay:sweep-m3`; 158,273 jobs,
+0 violations) is kept as `bench/results/chaos-sweep-raft-102436f.json`.
 Reproduce a seed with `make chaos SEED=n` (add `BACKEND=redis` for Redis).
 
 ## 10. Alternatives considered
@@ -527,7 +527,7 @@ therefore uses 3 submits/s of 3–6s jobs, so a requeued job is re-leased
 at once and the zombie reports while the new lease is live. With that
 workload the checker flags fencing violations and non-linearizable jobs,
 and every other invariant stays clean. The counts vary with timing: the
-recorded run (`bench/results/verification-1b44cba.txt`) flagged 10 and 5
+recorded run (`bench/results/verification-a6b5444.txt`) flagged 10 and 5
 on Redis and 10 and 7 on Raft. That makes it a precise
 detector, not a noisy one. `test/chaos/nofence_test.go` runs this
 automatically.
@@ -553,8 +553,8 @@ single inverted op.
 
 ### D6. Raft integration (M3)
 
-*Verification:* the 20-seed Raft sweeps in §9 (at `3de8a34` and again at
-`1b44cba`), both with zero violations.
+*Verification:* the 20-seed Raft sweeps in §9 (at `102436f` and again at
+`a6b5444`), both with zero violations.
 
 **Library.** `hashicorp/raft` with `raft-boltdb/v2` (bbolt) for the log
 and stable store, and file snapshots. Writing Raft from scratch was
@@ -714,13 +714,13 @@ never set an endpoint, so they missed it. The fix is a schemaless
 service-name resource, and `TestSetupWithEndpoint` now exercises the real
 exporter path.
 
-**Verified end to end.** Against `make up` at `1b44cba`, a fail-n-times job
+**Verified end to end.** Against `make up` at `a6b5444`, a fail-n-times job
 (n=1, max 3) produced one Jaeger trace holding SubmitJob → relay.enqueue →
 two relay.dispatch → relay.execute branches (FailJob, then CompleteJob),
 spanning the coordinator and worker services. Prometheus scraped all three
 coordinators, and every panel of the provisioned Grafana dashboard
 returned data through Grafana's query API, with no errors. The record is
-in `bench/results/verification-1b44cba.txt`.
+in `bench/results/verification-a6b5444.txt`.
 
 ### D8. Comparative benchmark methodology (M5)
 
@@ -766,7 +766,7 @@ re-dialled for every phase. The partial results were discarded and the
 whole benchmark was rerun, so that every number comes from one
 consistent run.
 
-**Re-measured at `f0f83e9`.** The README's numbers now come from
+**Re-measured at `bf23b85`.** The README's numbers now come from
 `compare-20261027T033746Z`. That run adds recovery and fault phases for
 asynq-tuned and records the image's git revision. The M5 run
 (`compare-20261026T085821Z`) is kept for reference. Throughput is about
