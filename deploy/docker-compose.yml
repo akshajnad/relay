@@ -1,0 +1,66 @@
+# Local Relay cluster: Redis, one coordinator, N workers.
+#
+#   docker compose -f deploy/docker-compose.yml up -d --build --scale worker=3
+#
+# Every RELAY_* variable below can be overridden from the environment; the
+# integration tests and relay-bench use that to pick host ports, worker
+# concurrency, and liveness timings.
+name: relay
+
+x-relay-image: &relay-image
+  image: relay:dev
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    # AOF with fsync every second: a Redis crash loses at most ~1s of
+    # acknowledged transitions. RDB snapshots are off.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", ""]
+    ports:
+      - "${RELAY_REDIS_PUBLISH:-127.0.0.1:6379:6379}"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  coordinator:
+    <<: *relay-image
+    command: ["coordinator"]
+    environment:
+      RELAY_REDIS_ADDR: redis:6379
+      RELAY_LOG_LEVEL: ${RELAY_LOG_LEVEL:-info}
+      RELAY_LEASE_DURATION: ${RELAY_LEASE_DURATION:-10s}
+      RELAY_HEARTBEAT_INTERVAL: ${RELAY_HEARTBEAT_INTERVAL:-1s}
+      RELAY_MISSED_HEARTBEATS: ${RELAY_MISSED_HEARTBEATS:-3}
+      RELAY_POLL_TIMEOUT: ${RELAY_POLL_TIMEOUT:-5s}
+      RELAY_BACKOFF_BASE: ${RELAY_BACKOFF_BASE:-200ms}
+      RELAY_REDIS_POOL_SIZE: ${RELAY_REDIS_POOL_SIZE:-256}
+    ports:
+      - "${RELAY_GRPC_PUBLISH:-127.0.0.1:50051:50051}"
+      - "${RELAY_METRICS_PUBLISH:-127.0.0.1:9090:9090}"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "relayctl", "--timeout", "1s", "health"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    stop_grace_period: 15s
+
+  worker:
+    <<: *relay-image
+    command: ["worker"]
+    environment:
+      RELAY_COORDINATOR: coordinator:50051
+      RELAY_CONCURRENCY: ${RELAY_WORKER_CONCURRENCY:-4}
+      RELAY_SLEEP_DURATION: ${RELAY_SLEEP_DURATION:-20ms}
+      RELAY_LOG_LEVEL: ${RELAY_LOG_LEVEL:-info}
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    stop_grace_period: 35s

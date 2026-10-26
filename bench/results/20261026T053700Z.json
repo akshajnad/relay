@@ -1,0 +1,216 @@
+{
+  "timestamp": "2026-10-26T05:37:00.450586Z",
+  "config": {
+    "compose_file": "deploy/docker-compose.yml",
+    "project": "relay-bench",
+    "manage_cluster": true,
+    "build": true,
+    "down": true,
+    "coordinator": "127.0.0.1:50051",
+    "metrics_addr": "127.0.0.1:9090",
+    "worker_containers": 10,
+    "worker_concurrency": 10,
+    "jobs": 5000,
+    "modes": [
+      "burst",
+      "steady",
+      "preload"
+    ],
+    "steady_rate_per_sec": 2000,
+    "sleep_duration": 20000000,
+    "submitters": 32,
+    "warmup_jobs": 500,
+    "profile": false,
+    "profile_seconds": 5,
+    "out_dir": "bench/results",
+    "run_timeout": 300000000000
+  },
+  "host": {
+    "os": "macOS 26.6.2",
+    "arch": "arm64",
+    "cpu": "Apple M4 Pro",
+    "cores": 14,
+    "memory_gb": "24",
+    "go_version": "go1.26.1"
+  },
+  "docker": {
+    "server_version": "29.8.2",
+    "operating_system": "OrbStack",
+    "kernel_version": "7.2.12-orbstack-00394-gbecdd6130068",
+    "cpus": 14,
+    "memory_gb": 11.7
+  },
+  "runs": [
+    {
+      "mode": "burst",
+      "jobs": 5000,
+      "submit_seconds": 0.193840417,
+      "makespan_seconds": 1.162567333,
+      "throughput_jobs_per_sec": 4300.826161266308,
+      "scheduling_latency": {
+        "count": 5000,
+        "mean_ms": 0.6308564,
+        "p50_ms": 0.42,
+        "p90_ms": 1.118,
+        "p95_ms": 1.694,
+        "p99_ms": 4.415,
+        "p999_ms": 9.823,
+        "max_ms": 12.127,
+        "min_ms": 0.035
+      },
+      "queue_wait": {
+        "count": 5000,
+        "mean_ms": 462.22596180000005,
+        "p50_ms": 465.151,
+        "p90_ms": 843.263,
+        "p95_ms": 889.343,
+        "p99_ms": 929.279,
+        "p999_ms": 938.495,
+        "max_ms": 938.495,
+        "min_ms": 0.001
+      },
+      "acquire_script_rtt": {
+        "count": 5148,
+        "mean_ms": 0.5948368298368308,
+        "p50_ms": 0.411,
+        "p90_ms": 1.129,
+        "p95_ms": 1.72,
+        "p99_ms": 3.645,
+        "p999_ms": 6.819,
+        "max_ms": 9.127,
+        "min_ms": 0.018
+      },
+      "counters": {
+        "submitted": 5000,
+        "duplicates": 0,
+        "leased": 5000,
+        "succeeded": 5000,
+        "retried": 0,
+        "failed": 0,
+        "dead": 0,
+        "stale_rejections": 0,
+        "requeued": 0,
+        "released": 0,
+        "workers_expired": 0
+      }
+    },
+    {
+      "mode": "steady",
+      "jobs": 5000,
+      "submit_seconds": 2.5160859159999998,
+      "makespan_seconds": 2.529423333,
+      "throughput_jobs_per_sec": 1976.7351454253387,
+      "scheduling_latency": {
+        "count": 5000,
+        "mean_ms": 0.15414780000000006,
+        "p50_ms": 0.076,
+        "p90_ms": 0.139,
+        "p95_ms": 0.18,
+        "p99_ms": 1.314,
+        "p999_ms": 16.847,
+        "max_ms": 18.271,
+        "min_ms": 0.028
+      },
+      "queue_wait": {
+        "count": 5000,
+        "mean_ms": 0.0243894,
+        "p50_ms": 0.001,
+        "p90_ms": 0.001,
+        "p95_ms": 0.001,
+        "p99_ms": 1,
+        "p999_ms": 4.001,
+        "max_ms": 6.003,
+        "min_ms": 0.001
+      },
+      "acquire_script_rtt": {
+        "count": 10085,
+        "mean_ms": 0.1314026772434308,
+        "p50_ms": 0.069,
+        "p90_ms": 0.14,
+        "p95_ms": 0.188,
+        "p99_ms": 0.999,
+        "p999_ms": 13.639,
+        "max_ms": 13.855,
+        "min_ms": 0.011
+      },
+      "counters": {
+        "submitted": 5000,
+        "duplicates": 0,
+        "leased": 5000,
+        "succeeded": 5000,
+        "retried": 0,
+        "failed": 0,
+        "dead": 0,
+        "stale_rejections": 0,
+        "requeued": 0,
+        "released": 0,
+        "workers_expired": 0
+      }
+    },
+    {
+      "mode": "preload",
+      "jobs": 5000,
+      "submit_seconds": 0.168883042,
+      "makespan_seconds": 2.912435666,
+      "throughput_jobs_per_sec": 1716.7761191673308,
+      "scheduling_latency": {
+        "count": 5000,
+        "mean_ms": 0.46258700000000014,
+        "p50_ms": 0.345,
+        "p90_ms": 0.916,
+        "p95_ms": 1.272,
+        "p99_ms": 1.873,
+        "p999_ms": 2.483,
+        "max_ms": 2.587,
+        "min_ms": 0.037
+      },
+      "queue_wait": {
+        "count": 5000,
+        "mean_ms": 2383.2555519999983,
+        "p50_ms": 2402.303,
+        "p90_ms": 2783.231,
+        "p95_ms": 2846.719,
+        "p99_ms": 2887.679,
+        "p999_ms": 2889.727,
+        "max_ms": 2891.775,
+        "min_ms": 1658.88
+      },
+      "acquire_script_rtt": {
+        "count": 5112,
+        "mean_ms": 0.45575880281690107,
+        "p50_ms": 0.338,
+        "p90_ms": 0.91,
+        "p95_ms": 1.263,
+        "p99_ms": 1.856,
+        "p999_ms": 2.481,
+        "max_ms": 2.585,
+        "min_ms": 0.017
+      },
+      "counters": {
+        "submitted": 5000,
+        "duplicates": 0,
+        "leased": 5000,
+        "succeeded": 5000,
+        "retried": 0,
+        "failed": 0,
+        "dead": 0,
+        "stale_rejections": 0,
+        "requeued": 0,
+        "released": 0,
+        "workers_expired": 10
+      },
+      "notes": {
+        "makespan": "includes worker container start-up after the queue was filled"
+      }
+    }
+  ],
+  "target": {
+    "description": "p95 scheduling latency \u003c 25ms with 100 worker slots and 5,000 queued jobs",
+    "p95_ms": 25,
+    "met": {
+      "burst": true,
+      "preload": true,
+      "steady": true
+    }
+  }
+}
