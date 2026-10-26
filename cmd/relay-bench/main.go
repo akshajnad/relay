@@ -10,6 +10,12 @@
 //
 //	go run ./cmd/relay-bench                      # burst + steady, 10x10 workers, 5000 jobs
 //	go run ./cmd/relay-bench --modes preload --jobs 5000
+//
+// The compare subcommand runs the same workloads against Relay-Redis,
+// Relay-Raft and asynq (see compare.go); drive is its in-cluster load
+// driver and plot regenerates charts from a results file.
+//
+//	go run ./cmd/relay-bench compare --backends relay-redis,relay-raft,asynq,asynq-tuned
 package main
 
 import (
@@ -57,6 +63,16 @@ type Config struct {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		sub := map[string]func([]string) error{"compare": compareMain, "drive": driveMain, "plot": plotMain}
+		if f, ok := sub[os.Args[1]]; ok {
+			if err := f(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "relay-bench:", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "relay-bench:", err)
 		os.Exit(1)
