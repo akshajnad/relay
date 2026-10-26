@@ -1,3 +1,6 @@
 [
-  {"name": "coordinator", "listen": "0.0.0.0:17000", "upstream": "coordinator:50051", "enabled": true}
+  {"name": "coordinator", "listen": "0.0.0.0:17000", "upstream": "coordinator:50051", "enabled": true},
+  {"name": "n1", "listen": "0.0.0.0:17001", "upstream": "coord1:50051", "enabled": true},
+  {"name": "n2", "listen": "0.0.0.0:17002", "upstream": "coord2:50051", "enabled": true},
+  {"name": "n3", "listen": "0.0.0.0:17003", "upstream": "coord3:50051", "enabled": true}
 ]

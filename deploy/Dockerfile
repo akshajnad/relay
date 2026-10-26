@@ -12,6 +12,6 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     ./cmd/coordinator ./cmd/worker ./cmd/relayctl ./cmd/relay-chaos
 
 FROM alpine:3.21
-RUN adduser -D -u 10001 relay
+RUN adduser -D -u 10001 relay && mkdir /data && chown relay /data
 COPY --from=build /out/ /usr/local/bin/
 USER relay

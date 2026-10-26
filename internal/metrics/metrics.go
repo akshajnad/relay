@@ -100,6 +100,9 @@ type Registry struct {
 	Requeued        atomic.Int64
 	Released        atomic.Int64
 	WorkersExpired  atomic.Int64
+	// LeaderChanges counts leadership transitions seen by this node
+	// (replicated stores only).
+	LeaderChanges atomic.Int64
 
 	mu    sync.Mutex
 	since time.Time
@@ -126,6 +129,7 @@ type Counters struct {
 	Requeued        int64 `json:"requeued"`
 	Released        int64 `json:"released"`
 	WorkersExpired  int64 `json:"workers_expired"`
+	LeaderChanges   int64 `json:"leader_changes"`
 }
 
 // Snapshot is the JSON document served at /metrics.
@@ -158,6 +162,7 @@ func (r *Registry) Snapshot() Snapshot {
 			Requeued:        r.Requeued.Load(),
 			Released:        r.Released.Load(),
 			WorkersExpired:  r.WorkersExpired.Load(),
+			LeaderChanges:   r.LeaderChanges.Load(),
 		},
 	}
 }
@@ -170,7 +175,7 @@ func (r *Registry) Reset() {
 	r.AcquireScript.Reset()
 	for _, c := range []*atomic.Int64{
 		&r.Submitted, &r.Duplicates, &r.Leased, &r.Succeeded, &r.Retried, &r.Failed,
-		&r.Dead, &r.StaleRejections, &r.Requeued, &r.Released, &r.WorkersExpired,
+		&r.Dead, &r.StaleRejections, &r.Requeued, &r.Released, &r.WorkersExpired, &r.LeaderChanges,
 	} {
 		c.Store(0)
 	}

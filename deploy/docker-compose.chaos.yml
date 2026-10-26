@@ -27,6 +27,11 @@ networks:
   clientnet: {}
   backnet: {}
 
+volumes:
+  coord1-data: {}
+  coord2-data: {}
+  coord3-data: {}
+
 services:
   redis:
     profiles: [redis]
@@ -56,6 +61,56 @@ services:
       interval: 1s
       timeout: 2s
       retries: 30
+
+  # Raft backend: three coordinators replicating among themselves over
+  # backnet (via the <name>-raft aliases, which exist only there), serving
+  # clients on clientnet.
+  coord1: &raft-node
+    profiles: [raft]
+    <<: *relay-image
+    command: ["coordinator"]
+    environment: &raft-env
+      <<: *coordinator-env
+      RELAY_STORE: raft
+      RELAY_NODE_ID: n1
+      RELAY_RAFT_ADVERTISE: coord1-raft:7000
+      RELAY_GRPC_ADVERTISE: coord1:50051
+      RELAY_BOOTSTRAP: "true"
+      RELAY_PEERS: n1=coord1-raft:7000=coord1:50051,n2=coord2-raft:7000=coord2:50051,n3=coord3-raft:7000=coord3:50051
+      RELAY_RAFT_SNAPSHOT_THRESHOLD: "2048"
+      RELAY_RAFT_TRAILING_LOGS: "1024"
+    volumes: ["coord1-data:/data"]
+    networks:
+      clientnet: {}
+      backnet: {aliases: [coord1-raft]}
+    ports: ["127.0.0.1::50051"]
+    healthcheck:
+      test: ["CMD", "relayctl", "--timeout", "1s", "health"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+  coord2:
+    <<: *raft-node
+    environment:
+      <<: *raft-env
+      RELAY_NODE_ID: n2
+      RELAY_RAFT_ADVERTISE: coord2-raft:7000
+      RELAY_GRPC_ADVERTISE: coord2:50051
+    volumes: ["coord2-data:/data"]
+    networks:
+      clientnet: {}
+      backnet: {aliases: [coord2-raft]}
+  coord3:
+    <<: *raft-node
+    environment:
+      <<: *raft-env
+      RELAY_NODE_ID: n3
+      RELAY_RAFT_ADVERTISE: coord3-raft:7000
+      RELAY_GRPC_ADVERTISE: coord3:50051
+    volumes: ["coord3-data:/data"]
+    networks:
+      clientnet: {}
+      backnet: {aliases: [coord3-raft]}
 
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.12.0

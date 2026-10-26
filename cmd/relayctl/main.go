@@ -1,10 +1,16 @@
-// Command relayctl is the Relay CLI: submit jobs, inspect them, and list
-// workers.
+// Command relayctl is the Relay CLI: submit jobs, inspect them, list
+// workers, and manage a Raft coordinator cluster.
 //
-//	relayctl [--coordinator addr] submit --type sleep --payload '{"duration_ms":100}' [--idempotency-key k] [--max-attempts n] [--wait]
+//	relayctl [--coordinator addrs] submit --type sleep --payload '{"duration_ms":100}' [--idempotency-key k] [--max-attempts n] [--wait]
 //	relayctl get [--json] <job-id>
 //	relayctl workers
 //	relayctl health
+//	relayctl cluster status
+//	relayctl cluster add --id n4 --raft-addr coord4:7000 --grpc-addr coord4:50051
+//	relayctl cluster remove --id n4
+//
+// --coordinator takes one address or a list (id=addr,...); calls follow
+// NOT_LEADER redirects to the leader.
 package main
 
 import (
@@ -24,13 +30,14 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-const usage = `usage: relayctl [--coordinator addr] <command> [flags]
+const usage = `usage: relayctl [--coordinator addrs] <command> [flags]
 
 commands:
   submit    submit a job
   get       show a job and its transition history
   workers   list registered workers
   health    exit 0 if the coordinator reports SERVING
+  cluster   status | add --id --raft-addr --grpc-addr | remove --id (Raft only)
 `
 
 func main() {
@@ -43,7 +50,7 @@ func main() {
 func run(args []string) error {
 	fs := flag.NewFlagSet("relayctl", flag.ExitOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage); fs.PrintDefaults() }
-	addr := fs.String("coordinator", "localhost:50051", "coordinator gRPC address")
+	addr := fs.String("coordinator", "localhost:50051", "coordinator gRPC address, or a list id=addr,id=addr")
 	timeout := fs.Duration("timeout", 10*time.Second, "per-request timeout")
 	if err := envflag.Parse(fs, "RELAY", args); err != nil {
 		return err
@@ -52,7 +59,7 @@ func run(args []string) error {
 		fs.Usage()
 		os.Exit(2)
 	}
-	conn, err := rpc.Dial(*addr)
+	conn, err := rpc.DialCluster(*addr)
 	if err != nil {
 		return err
 	}
@@ -60,6 +67,7 @@ func run(args []string) error {
 	c := client{
 		jobs:    relayv1.NewJobServiceClient(conn),
 		workers: relayv1.NewWorkerServiceClient(conn),
+		cluster: relayv1.NewClusterServiceClient(conn),
 		timeout: *timeout,
 	}
 
@@ -71,6 +79,8 @@ func run(args []string) error {
 		return c.get(rest)
 	case "workers":
 		return c.listWorkers()
+	case "cluster":
+		return c.clusterCmd(rest)
 	case "health":
 		ctx, cancel := c.ctx()
 		defer cancel()
@@ -90,6 +100,7 @@ func run(args []string) error {
 type client struct {
 	jobs    relayv1.JobServiceClient
 	workers relayv1.WorkerServiceClient
+	cluster relayv1.ClusterServiceClient
 	timeout time.Duration
 }
 
@@ -211,6 +222,50 @@ func (c client) listWorkers() error {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\n", x.Id, x.State, x.Hostname, x.Concurrency, x.ActiveJobs, ts(x.LastHeartbeatMs))
 	}
 	return w.Flush()
+}
+
+func (c client) clusterCmd(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: relayctl cluster status | add | remove")
+	}
+	ctx, cancel := c.ctx()
+	defer cancel()
+	switch args[0] {
+	case "status":
+		st, err := c.cluster.ClusterStatus(ctx, &relayv1.ClusterStatusRequest{})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("node %s is %s, term %d; leader %s (%s)\nlast index %d, commit %d, applied %d\n\n",
+			st.NodeId, st.State, st.Term, st.LeaderId, st.LeaderAddress, st.LastIndex, st.CommitIndex, st.AppliedIndex)
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "ID\tRAFT\tGRPC\tVOTER\tLEADER")
+		for _, s := range st.Servers {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%v\t%v\n", s.Id, s.RaftAddress, s.GrpcAddress, s.Voter, s.Leader)
+		}
+		return w.Flush()
+	case "add":
+		fs := flag.NewFlagSet("cluster add", flag.ExitOnError)
+		id := fs.String("id", "", "new node's server id")
+		raftAddr := fs.String("raft-addr", "", "new node's Raft address")
+		grpcAddr := fs.String("grpc-addr", "", "new node's client (gRPC) address")
+		fs.Parse(args[1:])
+		_, err := c.cluster.AddVoter(ctx, &relayv1.AddVoterRequest{Id: *id, RaftAddress: *raftAddr, GrpcAddress: *grpcAddr})
+		if err == nil {
+			fmt.Printf("added %s\n", *id)
+		}
+		return err
+	case "remove":
+		fs := flag.NewFlagSet("cluster remove", flag.ExitOnError)
+		id := fs.String("id", "", "server id to remove")
+		fs.Parse(args[1:])
+		_, err := c.cluster.RemoveServer(ctx, &relayv1.RemoveServerRequest{Id: *id})
+		if err == nil {
+			fmt.Printf("removed %s\n", *id)
+		}
+		return err
+	}
+	return fmt.Errorf("unknown cluster command %q", args[0])
 }
 
 func ts(ms int64) string {

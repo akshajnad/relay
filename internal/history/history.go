@@ -7,9 +7,13 @@
 // whose invoke has no matching completion is indeterminate (info): it may
 // or may not have taken effect.
 //
-// Timestamps are wall-clock nanoseconds. Histories from different processes
-// are only comparable when every process shares one clock, which is why the
-// chaos harness runs all recorded processes inside the same Docker VM.
+// Ordering timestamps come from CLOCK_MONOTONIC, which on Linux is one
+// system-wide clock that never steps backwards, so histories from every
+// process on the same kernel are comparable. The chaos harness therefore
+// runs every recorded process inside the same Docker VM. (The wall clock is
+// not safe for this: a chaos run caught the VM's wall clock stepping back
+// 3.4ms, which made a read "return" before it was invoked.) Each record
+// also carries the wall clock, for correlating with external events.
 package history
 
 import (
@@ -20,6 +24,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // Record types.
@@ -56,8 +62,10 @@ type Record struct {
 	Process string `json:"p"`
 	Op      uint64 `json:"op"`
 	Type    string `json:"type"`
-	TimeNs  int64  `json:"t"`
-	Method  string `json:"m"`
+	// TimeNs is CLOCK_MONOTONIC; WallNs is the wall clock at the same time.
+	TimeNs int64  `json:"t"`
+	WallNs int64  `json:"wall,omitempty"`
+	Method string `json:"m"`
 
 	// Inputs (and, for acquire/submit/get, outputs).
 	Worker      string `json:"w,omitempty"`
@@ -84,7 +92,7 @@ type Recorder struct {
 	mu      sync.Mutex
 	f       *os.File
 	next    atomic.Uint64
-	now     func() int64
+	now     func() (mono, wall int64)
 }
 
 // Open creates a new history file in dir for this process incarnation. The
@@ -100,7 +108,7 @@ func Open(dir, role string) (*Recorder, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Recorder{process: proc, f: f, now: func() int64 { return time.Now().UnixNano() }}, nil
+	return &Recorder{process: proc, f: f, now: clockNow}, nil
 }
 
 // Process returns this recorder's process name.
@@ -126,7 +134,7 @@ func (r *Recorder) write(rec *Record) {
 func (r *Recorder) Begin(rec Record) uint64 {
 	rec.Op = r.next.Add(1)
 	rec.Type = Invoke
-	rec.TimeNs = r.now()
+	rec.TimeNs, rec.WallNs = r.now()
 	r.write(&rec)
 	return rec.Op
 }
@@ -135,7 +143,7 @@ func (r *Recorder) Begin(rec Record) uint64 {
 func (r *Recorder) End(op uint64, typ string, rec Record) {
 	rec.Op = op
 	rec.Type = typ
-	rec.TimeNs = r.now()
+	rec.TimeNs, rec.WallNs = r.now()
 	r.write(&rec)
 }
 
@@ -143,8 +151,17 @@ func (r *Recorder) End(op uint64, typ string, rec Record) {
 func (r *Recorder) Note(rec Record) {
 	rec.Op = r.next.Add(1)
 	rec.Type = Note
-	rec.TimeNs = r.now()
+	rec.TimeNs, rec.WallNs = r.now()
 	r.write(&rec)
 }
 
 func (r *Recorder) Close() error { return r.f.Close() }
+
+// clockNow reads CLOCK_MONOTONIC and the wall clock.
+func clockNow() (mono, wall int64) {
+	var ts unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &ts); err != nil {
+		panic(fmt.Sprintf("history: CLOCK_MONOTONIC: %v", err))
+	}
+	return ts.Nano(), time.Now().UnixNano()
+}

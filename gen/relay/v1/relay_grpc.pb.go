@@ -463,3 +463,189 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "relay/v1/relay.proto",
 }
+
+const (
+	ClusterService_ClusterStatus_FullMethodName = "/relay.v1.ClusterService/ClusterStatus"
+	ClusterService_AddVoter_FullMethodName      = "/relay.v1.ClusterService/AddVoter"
+	ClusterService_RemoveServer_FullMethodName  = "/relay.v1.ClusterService/RemoveServer"
+)
+
+// ClusterServiceClient is the client API for ClusterService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ClusterService manages a replicated (Raft) coordinator cluster. Every
+// node answers ClusterStatus with its own view; membership changes must be
+// sent to the leader (others answer NOT_LEADER).
+type ClusterServiceClient interface {
+	ClusterStatus(ctx context.Context, in *ClusterStatusRequest, opts ...grpc.CallOption) (*ClusterStatusResponse, error)
+	AddVoter(ctx context.Context, in *AddVoterRequest, opts ...grpc.CallOption) (*AddVoterResponse, error)
+	RemoveServer(ctx context.Context, in *RemoveServerRequest, opts ...grpc.CallOption) (*RemoveServerResponse, error)
+}
+
+type clusterServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewClusterServiceClient(cc grpc.ClientConnInterface) ClusterServiceClient {
+	return &clusterServiceClient{cc}
+}
+
+func (c *clusterServiceClient) ClusterStatus(ctx context.Context, in *ClusterStatusRequest, opts ...grpc.CallOption) (*ClusterStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClusterStatusResponse)
+	err := c.cc.Invoke(ctx, ClusterService_ClusterStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) AddVoter(ctx context.Context, in *AddVoterRequest, opts ...grpc.CallOption) (*AddVoterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddVoterResponse)
+	err := c.cc.Invoke(ctx, ClusterService_AddVoter_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) RemoveServer(ctx context.Context, in *RemoveServerRequest, opts ...grpc.CallOption) (*RemoveServerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveServerResponse)
+	err := c.cc.Invoke(ctx, ClusterService_RemoveServer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ClusterServiceServer is the server API for ClusterService service.
+// All implementations must embed UnimplementedClusterServiceServer
+// for forward compatibility.
+//
+// ClusterService manages a replicated (Raft) coordinator cluster. Every
+// node answers ClusterStatus with its own view; membership changes must be
+// sent to the leader (others answer NOT_LEADER).
+type ClusterServiceServer interface {
+	ClusterStatus(context.Context, *ClusterStatusRequest) (*ClusterStatusResponse, error)
+	AddVoter(context.Context, *AddVoterRequest) (*AddVoterResponse, error)
+	RemoveServer(context.Context, *RemoveServerRequest) (*RemoveServerResponse, error)
+	mustEmbedUnimplementedClusterServiceServer()
+}
+
+// UnimplementedClusterServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedClusterServiceServer struct{}
+
+func (UnimplementedClusterServiceServer) ClusterStatus(context.Context, *ClusterStatusRequest) (*ClusterStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClusterStatus not implemented")
+}
+func (UnimplementedClusterServiceServer) AddVoter(context.Context, *AddVoterRequest) (*AddVoterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddVoter not implemented")
+}
+func (UnimplementedClusterServiceServer) RemoveServer(context.Context, *RemoveServerRequest) (*RemoveServerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveServer not implemented")
+}
+func (UnimplementedClusterServiceServer) mustEmbedUnimplementedClusterServiceServer() {}
+func (UnimplementedClusterServiceServer) testEmbeddedByValue()                        {}
+
+// UnsafeClusterServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ClusterServiceServer will
+// result in compilation errors.
+type UnsafeClusterServiceServer interface {
+	mustEmbedUnimplementedClusterServiceServer()
+}
+
+func RegisterClusterServiceServer(s grpc.ServiceRegistrar, srv ClusterServiceServer) {
+	// If the following call panics, it indicates UnimplementedClusterServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ClusterService_ServiceDesc, srv)
+}
+
+func _ClusterService_ClusterStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClusterStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).ClusterStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_ClusterStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).ClusterStatus(ctx, req.(*ClusterStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_AddVoter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddVoterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).AddVoter(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_AddVoter_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).AddVoter(ctx, req.(*AddVoterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_RemoveServer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveServerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).RemoveServer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_RemoveServer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).RemoveServer(ctx, req.(*RemoveServerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// ClusterService_ServiceDesc is the grpc.ServiceDesc for ClusterService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ClusterService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "relay.v1.ClusterService",
+	HandlerType: (*ClusterServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ClusterStatus",
+			Handler:    _ClusterService_ClusterStatus_Handler,
+		},
+		{
+			MethodName: "AddVoter",
+			Handler:    _ClusterService_AddVoter_Handler,
+		},
+		{
+			MethodName: "RemoveServer",
+			Handler:    _ClusterService_RemoveServer_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "relay/v1/relay.proto",
+}

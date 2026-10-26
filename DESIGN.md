@@ -128,3 +128,145 @@ workload the checker flags 14 fencing violations and 9 non-linearizable
 jobs, and every other invariant stays clean. That makes it a precise
 detector, not a noisy one. `test/chaos/nofence_test.go` runs this
 automatically.
+
+### D5. History timestamps use CLOCK_MONOTONIC (M2, found in M3)
+
+**Finding.** A 5-minute Redis chaos run (seed 2) reported one job as
+non-linearizable. Its history was trivially linearizable (submit →
+acquire → complete → reads that all said SUCCEEDED), but one read
+*returned 3.4ms before it was invoked*. The Docker VM's wall clock had
+stepped backwards, most likely a time-sync correction against the host.
+Porcupine cannot place an op whose interval is inverted, so it rejected
+a correct history.
+
+**Fix.** Records are ordered by `CLOCK_MONOTONIC`. On Linux it is one
+system-wide clock, so it is comparable across every container on the VM
+kernel, and it never steps backwards. Records keep the wall clock in a
+separate field, for correlating with Docker events in M5. The reader now
+*rejects* any op whose completion precedes its invocation, so a clock
+problem fails loudly as a harness error and never looks like a Relay
+bug. Re-checking the saved run produces exactly that error, naming the
+single inverted op.
+
+### D6. Raft integration (M3)
+
+**Library.** `hashicorp/raft` with `raft-boltdb/v2` (bbolt) for the log
+and stable store, and file snapshots. Writing Raft from scratch was
+rejected: the risk sits in exactly the corner cases (log matching after
+leader changes, joint configuration changes, snapshot install) that a
+battle-tested library already handles. Relay's value is in what it
+builds on top.
+
+**Replicated FSM.** Every mutation of job or worker state is one
+command: submit, register, acquire, complete, fail, release,
+expire_leases, expire_workers, set_node_addr. The FSM ports the Lua
+scripts transition for transition, including the exact backoff
+arithmetic, and the same conformance suite checks both backends.
+Determinism rules:
+- `Apply` never reads the clock or a random source. The leader stamps
+  `now`, ids, and the backoff jitter into the command when it proposes.
+- `Apply` iterates maps only in sorted order. Worker death revokes leases
+  in job-id order, so event logs are identical on every replica.
+- Backoff base and max travel in each command, so nodes with different
+  flags cannot diverge.
+- `TestReplicasAreIdentical` checks the result: all replicas, and a fresh
+  FSM replaying the leader's log, serialize to the same bytes.
+
+Commands are JSON, not protobuf as first planned. Go's `encoding/json`
+output for structs and maps is deterministic, which is all the FSM
+needs, and JSON avoids a second codegen path. Its cost (base64 payloads,
+roughly 2× larger entries) shows up in the M5 numbers.
+
+**Fencing token = log index of the granting entry.** Raft log indices
+are unique and strictly increasing across the whole log, including
+across terms and leader changes. A new leader's entries always come
+after every committed entry of earlier terms (Leader Completeness), and
+an uncommitted entry that gets overwritten never reached `Apply`, so its
+index was never handed out as a token. A lease granted later therefore
+always has a larger token, without a per-job counter. Two leases can
+never share a token, because each acquire is its own entry.
+
+**Soft-state leases.** The FSM stores a lease's owner and token, never
+its deadline. Deadlines (`leases`) and worker heartbeats (`beats`) live
+only in the leader's memory, on its monotonic clock:
+- A heartbeat (`Renew`) checks ownership against the FSM and moves the
+  deadline. It costs no log write. With N workers heartbeating every
+  500ms, this keeps 2N entries per second out of the log.
+- The reaper proposes `expire_leases(job, token)`. The FSM revokes the
+  lease only if `token` is still current, so a proposal that raced a
+  completion or a newer lease does nothing.
+- On election the new leader calls `Barrier()`, so its FSM holds every
+  committed entry. It then sets every lease deadline to now + lease and
+  every live worker's heartbeat to now, and only then serves.
+
+*Why this is safe.* Losing or resetting soft state can only make a lease
+last *longer* than it would have. What stops a double completion is
+fencing, not the deadline. A worker whose lease expired late still
+cannot complete once the job has been re-leased, because its token is no
+longer current. A worker that resumes after a failover keeps its lease
+and can complete, which is correct, since nobody else holds it. The
+worst case is delayed recovery: up to one extra lease period plus one
+election timeout before a dead worker's jobs are requeued.
+
+*Worker death is replicated, heartbeats are not.* `expire_workers` is a
+command, so "a dead worker must re-register" holds on every leader.
+Re-registration is rare and worth a log entry. Heartbeat timestamps are
+the high-rate part and stay soft.
+
+*A lease can be revoked slightly early.* A heartbeat can land after the
+reaper has decided to expire that lease but before the command commits.
+Redis avoids this because its heartbeat and reap scripts are atomic with
+each other. Here the cost is one unneeded reassignment, never a
+correctness problem.
+
+**Leader-only serving.**
+- Writes and `AcquireJob` go to the leader. A follower returns
+  `NotLeaderError` with the leader's id and its gRPC address, which is
+  replicated in the FSM by `set_node_addr`.
+- `Get` and `ListWorkers` call `VerifyLeader()` first. A deposed leader
+  that has not noticed yet cannot serve a stale read.
+  `TestMinorityLeaderStepsDown` checks this: an isolated old leader
+  refuses both reads and writes.
+- When leadership is lost, the coordinator wakes every pending long-poll.
+  Each one retries the store, gets NOT_LEADER, and returns it.
+  `TestLeadershipLossFailsPendingLongPolls` checks this happens within 1s
+  for five blocked pollers.
+- An empty `AcquireJob` costs no log entry. The leader checks its own FSM
+  first, which holds every acknowledged submit and requeue.
+- A duplicate idempotency key is answered from the FSM. A committed entry
+  is never undone, so even a deposed leader answers that correctly.
+
+**Proposal outcomes.** Apply returns `raft.ErrNotLeader` before anything
+is appended, so it maps to NOT_LEADER, which is safe to redirect.
+`ErrLeadershipLost` and timeouts *after* proposing have unknown outcomes.
+They map to plain UNAVAILABLE, the client library does not replay them,
+and the caller's own retry logic runs instead (idempotency keys for
+submits, ALREADY for reports).
+
+**Client library.** `rpc.DialCluster` keeps one connection per endpoint
+and routes each call to the believed leader:
+- NOT_LEADER → follow the hint (by node id, so it works through
+  Toxiproxy or published host ports), otherwise try the next node; retry
+  with jittered backoff until the call's deadline.
+- Any other UNAVAILABLE or deadline → return the error unretried, but
+  send the next call to a different node.
+- `WaitForReady(false)` → a dead node fails fast instead of absorbing a
+  30s long-poll deadline.
+
+Workers, relayctl, relay-bench and relay-chaos all use it.
+
+**Membership.** Every node can bootstrap from an identical peer list
+(`--bootstrap --peers`); hashicorp/raft treats that as idempotent, and a
+node with existing state skips it. Nodes are added and removed through
+`ClusterService.AddVoter/RemoveServer` (`relayctl cluster add|remove`).
+A new node catches up by snapshot install when the log has been
+compacted past it (`TestAddAndRemoveVoter`).
+
+**Snapshots.** `Snapshot()` serializes the whole FSM to JSON on the FSM
+goroutine, which holds up Apply for O(state). It is simple and correct.
+Its cost grows because terminal jobs are never deleted (see limitations).
+`Restore` rebuilds the derived indexes (ready queue, leased and held
+sets) from the jobs. `TestSnapshotRestoreAndCatchUp` compacts the log
+past a stopped follower and checks that it installs the snapshot and
+converges. `TestFullClusterRestart` restarts all three nodes from
+snapshot plus log.
