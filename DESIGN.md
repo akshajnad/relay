@@ -1,10 +1,365 @@
-# Relay design
+# Relay: design
 
-Status: living document. The RFC sections are completed in milestone 6. The
-decision log below records each significant decision as it was made, with
-the alternatives that were rejected.
+Relay is a distributed task engine. Clients submit jobs, workers lease and
+run them, and the system keeps every job's state transitions exactly-once
+through worker crashes, stalls, network partitions and coordinator
+failover. This document is the engineering RFC. Section 12 is the decision
+log, written as the work happened, with the alternatives each decision
+rejected. Benchmark methodology and results are in the
+[README](README.md#benchmarks).
 
-## Decision log
+## 1. Goals and non-goals
+
+**Goals**
+
+- **Exactly-once state transitions under failure.** A job reaches a
+  terminal state at most once, its result is written exactly once, and an
+  acknowledged submission is never lost.
+- **At-least-once execution**, stated honestly: handlers may run more than
+  once, and the system says so.
+- **No single point of failure** in the replicated (Raft) configuration.
+  Losing a minority of coordinators costs at most an election.
+- **Verified rather than asserted.** Every invariant above is checked by a
+  seeded, reproducible chaos harness with a Jepsen-style history checker.
+  The checker is itself shown to catch a deliberately injected bug.
+- **Honest measurement.** Benchmarks are comparable across backends and
+  are reported as measured, including the places where Relay loses.
+
+**Non-goals**
+
+- Exactly-once *execution*. It is impossible without cooperation from the
+  side effects themselves (see §6).
+- Byzantine faults, malicious workers, or authentication.
+- Multi-tenant fairness, priorities, delayed or cron scheduling, and job
+  dependencies.
+- Horizontal write scaling. One Raft group, or one Redis, orders every
+  transition.
+- Garbage collection of finished jobs (see §11).
+
+## 2. Architecture
+
+```mermaid
+flowchart LR
+    subgraph clients
+        CLI[relayctl]
+        BENCH[relay-bench]
+    end
+    subgraph workers
+        W1[worker] & W2[worker] & W3[worker]
+    end
+    subgraph raft["Relay-Raft: 3 or 5 coordinators"]
+        L[coordinator<br/>leader<br/>FSM + soft leases]
+        F1[coordinator<br/>follower<br/>FSM replica]
+        F2[coordinator<br/>follower<br/>FSM replica]
+        L -- AppendEntries --> F1 & F2
+    end
+    subgraph redisb["Relay-Redis"]
+        C[coordinator] --> R[(Redis<br/>Lua scripts)]
+    end
+    CLI & BENCH -- SubmitJob / GetJob --> L
+    W1 & W2 & W3 -- Register / Heartbeat / AcquireJob long-poll / Complete / Fail --> L
+    F1 -. NOT_LEADER + leader address .-> W1
+```
+
+Each coordinator serves two gRPC services, `JobService` and
+`WorkerService`, plus `ClusterService` on Raft. All of them sit on one
+`store.Store` interface (§12, D1) with two implementations:
+
+| | Relay-Redis | Relay-Raft |
+|---|---|---|
+| State | Redis; each transition is one Lua script | in-memory FSM on every node; each mutation is a Raft log entry (raft-boltdb) |
+| Coordinators | 1 (stateless; Redis is the SPOF) | 3 or 5; only the leader serves |
+| Clock for leases | Redis `TIME` inside the script | the leader's monotonic clock (soft state) |
+| Fencing token | per-job counter, `HINCRBY` | Raft log index of the granting entry |
+| Heartbeat cost | one script call | none in the log (leader memory only) |
+
+**Dispatch** is pull-based. A worker's `AcquireJob` long-polls. The
+coordinator subscribes the poller to an in-process FIFO notifier *before*
+checking the store, so a submit that lands in between still wakes it (no
+lost wake-ups). Each submit wakes one poller (no thundering herd), and a
+leased job wakes the next poller if more work is ready.
+
+**Liveness** has two layers. The *failure detector* declares a worker dead
+after `missed-heartbeats × heartbeat-interval` (default 3 × 1s) and
+revokes all of its leases at once. The *reaper* is the backstop: it
+revokes any lease whose deadline passed, for example a lease whose
+acquire reply was lost, so its worker never renews it.
+
+## 3. Data model
+
+A **job** has an id (UUIDv7, so ids sort by creation), type, payload,
+idempotency key, status, attempts, max_attempts, lease owner and token,
+the token that last *reported* (`reported_token`), timestamps (created,
+enqueued = eligible, leased, finished), last error, result, the submit's
+W3C traceparent, and an append-only **event log** (SUBMITTED, LEASED,
+RETRY, REQUEUED, RELEASED, SUCCEEDED, FAILED, DEAD). The script or command
+that performs a transition appends its event atomically with it.
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING: SubmitJob
+    PENDING --> LEASED: Acquire (attempts++, new token)
+    LEASED --> SUCCEEDED: Complete (owner + current token)
+    LEASED --> PENDING: Fail retryable, attempts < max (backoff)
+    LEASED --> PENDING: lease revoked (expiry / worker death), attempts < max
+    LEASED --> PENDING: Release (reply undeliverable; attempt undone)
+    LEASED --> FAILED: Fail non-retryable
+    LEASED --> DEAD: attempts exhausted
+```
+
+A **worker** has an id (`w-<hostname>-<random>`), hostname, concurrency,
+state (ALIVE/DEAD), a registration time, the leases it holds, and a last
+heartbeat (Redis: a sorted set; Raft: leader soft state). A worker that
+was declared dead must re-register under a new id. Every call made with
+its old id is rejected with `FAILED_PRECONDITION`.
+
+**Redis layout:** `relay:ready` and `relay:leases` (ZSETs by eligible time
+and lease deadline), `relay:job:{id}` (HASH) plus `:events` (LIST),
+`relay:idem:{key}` (`SET NX`), `relay:workers` (ZSET by heartbeat),
+`relay:worker:{id}` plus `:jobs`, and `relay:dead`.
+
+**Raft FSM:** `jobs` map, a ready B-tree ordered by (eligible, id), an
+idempotency map, workers, per-worker held-lease sets, the leased set, and
+node id → gRPC address. Only `jobs`, `idem`, `workers` and `nodeAddrs` are
+snapshotted. The rest is derived on restore.
+
+## 4. Leases and fencing
+
+A lease is (job, owner, token). Every holder report (Complete, Fail)
+carries owner and token, and is applied only if the job is **LEASED to
+that owner with that token**. The check and the write are one atomic step:
+the same Lua script in Redis, the same FSM command in Raft.
+
+- A lease is revoked (worker death, expiry) or replaced (re-acquire) under
+  a **strictly larger token**. The old holder's late report is therefore
+  rejected (`ABORTED`) without touching the result, owner or timestamps.
+- A **retried** report on the same lease (lost reply) finds
+  `reported_token == token` and returns ALREADY. It is not applied twice.
+- Heartbeats renew **only the leases the worker names**, so a lease whose
+  acquire reply never arrived cannot be kept alive by an unrelated
+  heartbeat.
+- Tokens: in Redis, a per-job counter that is never reset. In Raft, the
+  log index of the acquire entry, which is unique and increasing across
+  terms by construction (§12, D6).
+
+Fencing is what makes failure detection a *liveness* concern rather than a
+*safety* one. Detection can be wrong in either direction: it can declare a
+slow worker dead, or keep a dead one alive for a while. Neither can
+produce a second terminal transition.
+
+## 5. Delivery semantics
+
+**Execution is at-least-once.** A coordinator cannot tell a dead worker
+from a slow or partitioned one. It reassigns the job, and the original
+holder may still finish running it. Handlers must therefore be idempotent
+or tolerate re-runs. The fault benchmark counts these duplicate
+executions for every backend.
+
+**State transitions are exactly-once.** Fencing (§4) guarantees at most
+one terminal transition and a result written exactly once. The chaos
+checker verifies both from the server's event log *and* from the clients'
+view.
+
+**Submission is idempotent.** A submit with a key that has been seen
+before returns the original job id (`duplicate=true`). On Redis, `SET NX`
+and job creation run in one script. On Raft, the idempotency map is part
+of the FSM. Retrying a submit through timeouts, restarts and failovers is
+therefore safe, and every client in this repo retries that way.
+
+## 6. Why not exactly-once execution
+
+Running a job exactly once needs the side effect and the "done" mark to
+commit atomically together, or the side effect to be idempotent. A worker
+that crashes after its side effect but before reporting is
+indistinguishable from one that crashed before. The scheduler would have
+to either re-run the job (at-least-once) or risk never running it
+(at-most-once). Relay chooses not losing work. It makes the *bookkeeping*
+exactly-once, which is the part the scheduler controls.
+
+## 7. Raft integration and the soft-state lease argument
+
+The details are in §12, D6. In short:
+
+1. Every mutation is a command. The leader stamps time, ids and jitter
+   into it, so `Apply` is deterministic: it reads no clocks, uses no
+   randomness, and iterates maps in sorted order.
+2. Lease **deadlines and heartbeats are not replicated**. The FSM records
+   owner and token. Deadlines live in the leader's memory, on its
+   monotonic clock. Renewal writes nothing to the log.
+3. The reaper proposes `ExpireLease(job, token)`. The FSM applies it only
+   if `token` is still current.
+4. A new leader calls `Barrier()`, resets every lease deadline to
+   `now + lease_duration` and every heartbeat to `now`, and only then
+   serves. Every worker gets a full grace period.
+
+**Safety argument.** Resetting or losing soft state only ever *extends*
+leases. What prevents a double completion is the token check in step 3
+and in every report, both of which go through the log. A lease that
+outlives its holder delays recovery by at most one lease period plus an
+election. It never allows two holders to both succeed, because the second
+grant has a larger token and the first holder's report then fails the
+check. The trade is bounded extra recovery latency in exchange for zero
+log writes per heartbeat, and the chaos sweep exercises it: leader kills,
+partitions, and full-cluster restarts while leases are live.
+
+**Leader handling.**
+- Followers answer NOT_LEADER with the leader's id and gRPC address, and
+  every client follows it (`rpc.DialCluster`).
+- Fresh reads call `VerifyLeader()`.
+- Losing leadership wakes every pending long-poll, which then returns
+  NOT_LEADER.
+- A minority-side old leader can neither commit writes nor serve reads.
+  `TestMinorityLeaderStepsDown` checks this, and so does the chaos fault
+  `partition-leader`, which cuts the leader from its peers while clients
+  can still reach it.
+
+## 8. Failure modes
+
+| Fault | Behavior | Why it is safe |
+|---|---|---|
+| Worker crashes (`docker kill`) | Detected after 3 missed heartbeats; every lease it held is revoked and requeued at once | Revocation and requeue are one atomic transition; the next lease has a larger token |
+| Worker stalls or is partitioned, then returns | Declared dead, job reassigned; its heartbeat gets `FAILED_PRECONDITION` and it re-registers; its late report gets `ABORTED` | Fencing: the stale token fails the check, so nothing is written |
+| Lease expires while the worker is alive | Reaper requeues the job | Same as above; the worker's report is fenced out |
+| Acquire reply lost | The lease is released at once if the coordinator saw the cancel, otherwise it is never renewed and expires | Heartbeats renew only named leases |
+| Report reply lost; worker retries | ALREADY; not re-applied | `reported_token` |
+| Submit reply lost; client retries | The same job id is returned | Idempotency key, atomic with creation |
+| Coordinator crash (Redis) | Clients get UNAVAILABLE and retry; liveness waits out a startup grace | All state is in Redis |
+| Raft follower crash / partition | Nothing visible; it catches up from the log or a snapshot when it returns | Quorum still commits |
+| Raft leader crash | Election (≈1–3s with defaults); clients follow NOT_LEADER to the new leader; new leader resets soft leases | Committed entries survive (Leader Completeness); tokens are log indices |
+| Raft leader partitioned to the minority | It steps down after its lease timeout; its writes cannot commit, its reads fail `VerifyLeader`; the majority elects a new leader | Quorum intersection |
+| Whole Raft cluster restarts | State is restored from snapshot plus log; serving resumes with a fresh grace period | Durable log (bbolt), deterministic replay |
+| Clock skew between nodes | No effect on safety; Raft deadlines use the leader's monotonic clock, Redis uses Redis `TIME` | Tokens, not times, decide every transition |
+| Redis crash (Relay-Redis) | **Not handled**: Redis is the single point of failure; AOF `everysec` can lose about 1s of acknowledged transitions | This is the explicit scope boundary that Relay-Raft removes |
+
+## 9. Verification
+
+| Layer | What it checks |
+|---|---|
+| Unit tests | every Lua script and every FSM command, with `-race` |
+| Store conformance suite (`internal/store/storetest`) | 14 behavioral tests run unchanged against Redis, a 1-node Raft cluster and a 3-node Raft cluster |
+| Raft tests | byte-identical replicas and log replay; snapshot install after compaction; full-cluster restart; failover with fencing; minority leader; membership changes |
+| Integration (`test/integration`) | real containers: worker kill and pause, coordinator restart, idempotency, retries, Raft leader kill, membership via relayctl |
+| Chaos (`cmd/relay-chaos`, `internal/check`) | seeded faults against real clusters; Jepsen-style histories; invariants plus per-job linearizability (porcupine) |
+| Deliberate bug (`relay_nofence`) | the checker flags fencing violations and non-linearizable histories on both backends |
+
+**Chaos sweep.** On the Raft backend, the sweep ran relay-chaos for 5
+minutes per seed with every fault kind enabled: worker kill, pause and
+partition; coordinator kill, pause, restart, client isolation and backend
+partition; leader kill, pause and partition (minority side); full-cluster
+restart; and Toxiproxy latency. Results: all 20 seeds pass (1–20), with zero invariant violations. The
+binary was commit `373990c`, run as image `relay:sweep-m3`.
+
+| Totals | |
+|---|---|
+| jobs acknowledged and checked | 158,273 |
+| recorded operations | 1,145,068 (38,247 indeterminate) |
+| faults injected | 1,100: 59 leader kills, 66 leader partitions, 58 leader pauses, 52 full-cluster restarts, 405 other coordinator faults, 360 worker faults, 100 latency windows |
+| leader elections (including restarts) | 379 |
+| stale reports rejected by fencing | 2,305 |
+| NOT_LEADER redirects followed | 65,458 |
+| fencing checks performed by the checker | 426,166 |
+
+| seed | jobs | ops | faults | elections | stale rejected | violations |
+|---|---|---|---|---|---|---|
+| 1 | 8,777 | 62,272 | 60 | 18 | 97 | 0 |
+| 2 | 7,538 | 57,243 | 52 | 21 | 155 | 0 |
+| 3 | 6,819 | 51,194 | 56 | 22 | 81 | 0 |
+| 4 | 8,892 | 66,034 | 56 | 14 | 121 | 0 |
+| 5 | 7,723 | 55,565 | 49 | 21 | 116 | 0 |
+| 6 | 7,468 | 52,842 | 55 | 25 | 148 | 0 |
+| 7 | 7,707 | 61,568 | 60 | 18 | 123 | 0 |
+| 8 | 7,066 | 52,903 | 50 | 22 | 228 | 0 |
+| 9 | 8,093 | 58,146 | 59 | 18 | 109 | 0 |
+| 10 | 8,190 | 59,411 | 54 | 21 | 92 | 0 |
+| 11 | 7,902 | 57,135 | 61 | 21 | 78 | 0 |
+| 12 | 8,059 | 56,977 | 59 | 18 | 71 | 0 |
+| 13 | 6,969 | 50,915 | 49 | 21 | 144 | 0 |
+| 14 | 8,502 | 63,734 | 53 | 18 | 110 | 0 |
+| 15 | 7,420 | 52,653 | 52 | 18 | 125 | 0 |
+| 16 | 7,153 | 51,027 | 59 | 18 | 149 | 0 |
+| 17 | 7,796 | 55,265 | 56 | 18 | 107 | 0 |
+| 18 | 8,987 | 61,652 | 52 | 16 | 53 | 0 |
+| 19 | 8,171 | 56,548 | 57 | 16 | 115 | 0 |
+| 20 | 9,041 | 61,984 | 51 | 15 | 83 | 0 |
+
+Raw per-seed numbers are in `bench/results/chaos-sweep-raft.json`.
+Reproduce a seed with `make chaos SEED=n`.
+
+## 10. Alternatives considered
+
+**Redis Redlock for lease ownership.** Redlock acquires a lock on a
+majority of independent Redis nodes and relies on bounded clock drift and
+on the holder finishing before the lock's TTL. It gives the lock holder no
+fencing token, so a client that pauses (GC, `docker pause`) past its TTL
+believes it still holds the lock. The *store* cannot reject its writes,
+because it has nothing to compare. That is exactly the zombie the chaos
+harness creates hundreds of times per run. Relay needs a monotonic token
+checked at the store, which Redlock does not provide. asynq, measured in
+the benchmarks, has the same shape: the worker checks its lease against
+*its own clock* before writing, and Redis does not check a token.
+
+**etcd as the replicated store.** etcd would provide linearizable storage,
+leases and revision numbers (usable as fencing tokens) out of the box.
+Relay-on-etcd would be a smaller codebase. It was rejected because every
+transition would become a multi-key etcd transaction over the network
+instead of a local FSM update, and etcd leases are per-key TTLs that cost
+a write to renew. The soft-state lease design (§7), which keeps heartbeats
+out of the log entirely, would not be possible, and the job's queue and
+indexes would have to be maintained through watches. The deeper point was
+also to own the state machine and show its determinism and failover
+argument end to end.
+
+**Writing Raft from scratch.** Rejected (§12, D6). The value of this
+project is the scheduler's correctness under failure, and a home-grown
+consensus layer would put the riskiest code in the least-tested place.
+`hashicorp/raft` is used by Consul, Nomad and Vault.
+
+**Push vs. pull dispatch.** With *push*, the coordinator picks a worker
+and sends it the job. That needs per-worker capacity tracking, and any
+error in that tracking turns into overload or idling, plus a delivery
+protocol on top. With *pull* (long-poll), a worker asks only when it has a
+free slot, so capacity is implicit and backpressure is free. The cost is
+the wake-up path, which the FIFO notifier makes cheap: one wake per job,
+no lost wake-ups. Latency stays sub-millisecond on Redis (see benchmarks).
+On Raft, an acquire costs a log commit, which push would also pay.
+
+**Replicating heartbeats** (lease deadlines in the FSM). This is simpler
+to reason about, but costs a log write per worker heartbeat (or per
+lease), which takes write bandwidth from real transitions and adds no
+safety, since fencing carries safety (§7).
+
+**Per-job counters as Raft tokens.** They would work too, being
+incremented in the FSM. Log indices make the token monotonic *globally*
+and free, and they make "token = the entry that granted this lease" a
+debuggable fact.
+
+## 11. Known limitations
+
+- **Redis is a single point of failure** for Relay-Redis, and AOF
+  `everysec` can lose about 1s of acknowledged transitions on a Redis
+  crash. Use Relay-Raft when that matters.
+- **Raft write throughput is bounded by one leader's log**, and every
+  acquire is a log entry (fsync per batch). The benchmarks show the
+  resulting gap against Redis-based systems.
+- **No garbage collection of finished jobs or idempotency keys.** Both
+  stores grow without bound, and the Raft snapshot (a full JSON
+  serialization on the FSM goroutine) grows with them. Production would
+  need TTLs and compaction of terminal jobs.
+- **Snapshot cost is O(state) and blocks Apply** while it serializes. A
+  persistent data structure or copy-on-write maps would remove that.
+- **Lease revocation can be slightly early on Raft.** A heartbeat that
+  races an `ExpireLease` already in flight cannot save that lease (§12,
+  D6). This costs one needless reassignment, never correctness.
+- **Dispatch latency across a leader change mixes two clocks.** The
+  internal metric's `storeNow - eligibleAt` term can span two leaders'
+  wall clocks. It is bounded by the request-arrival term and does not
+  affect state.
+- **Scripts build keys dynamically**, so Relay-Redis is not Redis Cluster
+  safe.
+- **Commands are JSON**, roughly 2× larger than protobuf. That is simple
+  and deterministic, but not compact.
+
+## 12. Decision log
 
 ### D1. One `Store` interface covering every state transition (M1)
 
@@ -149,6 +504,8 @@ bug. Re-checking the saved run produces exactly that error, naming the
 single inverted op.
 
 ### D6. Raft integration (M3)
+
+*Verification:* the 20-seed sweep in §9, with zero violations.
 
 **Library.** `hashicorp/raft` with `raft-boltdb/v2` (bbolt) for the log
 and stable store, and file snapshots. Writing Raft from scratch was
