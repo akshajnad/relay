@@ -344,22 +344,23 @@ func (r *comparer) run() error {
 	if _, err := r.compose("up", "-d", "--wait", "--scale", r.be.workerSvc+"=0"); err != nil {
 		return err
 	}
-	target, err := r.hostTarget()
-	if err != nil {
-		return err
-	}
-	host, err := newJobClient(r.be.client, target, false)
-	if err != nil {
-		return err
-	}
-	defer host.Close()
-	r.host = host
+	defer func() {
+		if r.host != nil {
+			r.host.Close()
+		}
+	}()
 
 	for _, ph := range r.be.phases {
 		if !contains(r.cfg.Phases, ph) {
 			continue
 		}
 		fmt.Printf("--- %s\n", ph)
+		// Published host ports are ephemeral and change when a container
+		// restarts (the failover phase restarts coordinators), so the
+		// host-side client is re-dialled for every phase.
+		if err := r.redialHost(); err != nil {
+			return err
+		}
 		var err error
 		switch ph {
 		case "saturate":
@@ -388,6 +389,18 @@ func contains(xs []string, x string) bool {
 		}
 	}
 	return false
+}
+
+func (r *comparer) redialHost() error {
+	if r.host != nil {
+		r.host.Close()
+	}
+	target, err := r.hostTarget()
+	if err != nil {
+		return err
+	}
+	r.host, err = newJobClient(r.be.client, target, false)
+	return err
 }
 
 // hostTarget is how the orchestrator reaches the backend from the host.
@@ -811,23 +824,23 @@ func (r *comparer) failover() error {
 		"invoked after the kill that returns a job (worker history, VM wall clock)"}
 	r.res.Failover = tr
 
-	stop := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		t := time.NewTicker(20 * time.Millisecond)
-		defer t.Stop()
-		for n := 0; ; n++ {
-			select {
-			case <-stop:
-				return
-			case <-t.C:
-			}
-			_, _ = r.submitHost(fmt.Sprintf("fo-%d", n), "noop", 0, 3)
-		}
+	// A steady trickle of jobs from inside the cluster (by DNS name, so it
+	// keeps working while coordinators restart on new host ports).
+	name := r.project + "-failover-trickle"
+	_, _ = docker("rm", "-f", name)
+	trickle := exec.Command("docker", "compose", "-p", r.project, "-f", r.cfg.ComposeFile, "--profile", "driver",
+		"run", "--rm", "-T", "--no-deps", "--name", name, "driver",
+		"--client", r.be.client, "--target", r.be.driverTarget, "--history-dir", "/history",
+		"--mode", "steady", "--rate", "50", "--jobs", "10000000", "--type", "noop", "--key-prefix", "fo", "--submitters", "4")
+	trickle.Env = r.env()
+	if err := trickle.Start(); err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = docker("rm", "-f", name)
+		_ = trickle.Process.Kill()
+		_ = trickle.Wait()
 	}()
-	defer func() { close(stop); wg.Wait() }()
 
 	for trial := 0; trial < r.cfg.Trials; trial++ {
 		secs, err := r.failoverTrial(x)
@@ -908,6 +921,8 @@ func (r *comparer) failoverTrial(x *noteIndex) (float64, error) {
 	if _, err := docker("kill", ids[0]); err != nil {
 		return 0, err
 	}
+	// The killed node always comes back, whatever happens in the trial.
+	defer func() { _, _ = docker("start", ids[0]) }()
 	died, err := dieTime(ids[0])
 	if err != nil {
 		return 0, err
@@ -928,9 +943,6 @@ func (r *comparer) failoverTrial(x *noteIndex) (float64, error) {
 				}
 			}
 		}
-	}
-	if _, err := docker("start", ids[0]); err != nil {
-		return 0, err
 	}
 	return served.Seconds(), nil
 }
