@@ -16,6 +16,7 @@ import (
 	"github.com/akshajnad/relay/internal/metrics"
 	"github.com/akshajnad/relay/internal/redistest"
 	"github.com/akshajnad/relay/internal/store"
+	redisstore "github.com/akshajnad/relay/internal/store/redis"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -51,7 +52,7 @@ func startCluster(t *testing.T, mutCfg func(*coordinator.Config), mutStore func(
 	if mutStore != nil {
 		mutStore(&scfg)
 	}
-	st := store.New(redistest.Client(t), scfg)
+	st := redisstore.New(redistest.Client(t), scfg)
 	if err := st.LoadScripts(context.Background()); err != nil {
 		t.Fatal(err)
 	}

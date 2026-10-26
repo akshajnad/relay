@@ -92,7 +92,7 @@ func (s *workerService) Heartbeat(ctx context.Context, req *relayv1.HeartbeatReq
 	}
 	sctx, cancel := s.c.storeCtx(ctx)
 	defer cancel()
-	lost, err := s.c.store.Heartbeat(sctx, req.GetWorkerId(), held)
+	lost, err := s.c.store.Renew(sctx, req.GetWorkerId(), held)
 	if err != nil {
 		return nil, storeError(err)
 	}
@@ -111,11 +111,11 @@ func (s *workerService) Heartbeat(ctx context.Context, req *relayv1.HeartbeatReq
 //	        = min(handoff - requestArrival, handoff - eligible)
 //
 // handoff and requestArrival are on this process's monotonic clock. The job's
-// eligible time is on the Redis clock, so handoff - eligible is measured as
-// (handoff - scriptCall) + (redisNow - eligibleAt): each term spans a single
-// clock, and clock skew between coordinator and Redis cannot leak in.
-// Starting the first term at scriptCall rather than at the moment Redis ran
-// the script adds the request's network leg, so the result errs high.
+// eligible time is on the store clock, so handoff - eligible is measured as
+// (handoff - scriptCall) + (storeNow - eligibleAt): each term spans a single
+// clock, and clock skew between coordinator and store cannot leak in.
+// Starting the first term at scriptCall rather than at the moment the store
+// ran the acquire adds the request's network leg, so the result errs high.
 func (s *workerService) AcquireJob(ctx context.Context, req *relayv1.AcquireJobRequest) (*relayv1.AcquireJobResponse, error) {
 	c := s.c
 	arrival := time.Now()
@@ -152,9 +152,9 @@ func (s *workerService) AcquireJob(ctx context.Context, req *relayv1.AcquireJobR
 			}
 			handoff := time.Now()
 			sinceArrival := handoff.Sub(arrival)
-			sinceEligible := handoff.Sub(scriptCall) + time.Duration(res.RedisNowMs-res.EligibleAtMs)*time.Millisecond
+			sinceEligible := handoff.Sub(scriptCall) + time.Duration(res.StoreNowMs-res.EligibleAtMs)*time.Millisecond
 			c.metrics.SchedulingLatency.Record(min(sinceArrival, sinceEligible))
-			c.metrics.QueueWait.Record(time.Duration(res.RedisNowMs-j.EnqueuedAt) * time.Millisecond)
+			c.metrics.QueueWait.Record(time.Duration(res.StoreNowMs-j.EnqueuedAt) * time.Millisecond)
 			c.metrics.Leased.Add(1)
 			return &relayv1.AcquireJobResponse{HasJob: true, Job: jobToProto(j)}, nil
 		}

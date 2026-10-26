@@ -1,5 +1,5 @@
-// Package coordinator implements Relay's gRPC services on top of the Redis
-// store, the long-poll dispatch path, and the liveness loops (failure
+// Package coordinator implements Relay's gRPC services on top of a
+// store.Store, the long-poll dispatch path, and the liveness loops (failure
 // detector and lease reaper).
 package coordinator
 
@@ -11,6 +11,7 @@ import (
 
 	relayv1 "github.com/akshajnad/relay/gen/relay/v1"
 	"github.com/akshajnad/relay/internal/metrics"
+	"github.com/akshajnad/relay/internal/rpc"
 	"github.com/akshajnad/relay/internal/store"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -35,8 +36,8 @@ type Config struct {
 	StartupGrace time.Duration
 	// MaxPayloadBytes caps SubmitJob payloads.
 	MaxPayloadBytes int
-	// RedisTimeout bounds each store call.
-	RedisTimeout time.Duration
+	// StoreTimeout bounds each store call.
+	StoreTimeout time.Duration
 }
 
 func DefaultConfig() Config {
@@ -47,20 +48,20 @@ func DefaultConfig() Config {
 		ReapInterval:      500 * time.Millisecond,
 		StartupGrace:      4 * time.Second,
 		MaxPayloadBytes:   1 << 20,
-		RedisTimeout:      5 * time.Second,
+		StoreTimeout:      5 * time.Second,
 	}
 }
 
 // Coordinator owns the dispatch state shared by both gRPC services.
 type Coordinator struct {
-	store    *store.Store
+	store    store.Store
 	cfg      Config
 	notifier *Notifier
 	metrics  *metrics.Registry
 	log      *slog.Logger
 }
 
-func New(st *store.Store, cfg Config, m *metrics.Registry, log *slog.Logger) *Coordinator {
+func New(st store.Store, cfg Config, m *metrics.Registry, log *slog.Logger) *Coordinator {
 	return &Coordinator{store: st, cfg: cfg, notifier: NewNotifier(), metrics: m, log: log}
 }
 
@@ -74,19 +75,23 @@ func (c *Coordinator) Register(s *grpc.Server) {
 // the gRPC server can stop gracefully.
 func (c *Coordinator) Shutdown() { c.notifier.Close() }
 
-// storeCtx detaches a store call from the RPC's cancellation. A Lua script
-// that has been sent runs to completion in Redis regardless, so abandoning
-// the reply on client cancel would only hide what happened (for acquire, a
-// lease nobody knows about). The call still has its own timeout.
+// storeCtx detaches a store call from the RPC's cancellation. A transition
+// that has been sent (a Lua script, a Raft proposal) runs to completion in
+// the store regardless, so abandoning the reply on client cancel would only
+// hide what happened (for acquire, a lease nobody knows about). The call
+// still has its own timeout.
 func (c *Coordinator) storeCtx(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), c.cfg.RedisTimeout)
+	return context.WithTimeout(context.WithoutCancel(ctx), c.cfg.StoreTimeout)
 }
 
 func storeError(err error) error {
 	var stale *store.StaleLeaseError
+	var notLeader *store.NotLeaderError
 	switch {
 	case err == nil:
 		return nil
+	case errors.As(err, &notLeader):
+		return rpc.NotLeaderError(notLeader.LeaderID, notLeader.LeaderAddr)
 	case errors.As(err, &stale):
 		return status.Error(codes.Aborted, stale.Error())
 	case errors.Is(err, store.ErrNotFound):
