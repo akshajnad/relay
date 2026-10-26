@@ -1,16 +1,53 @@
 # Relay
 
-Relay is a distributed task execution engine written in Go. Clients submit jobs to a **coordinator**. A pool of **workers** long-polls for those jobs, runs them, and reports the results. The system stays correct when workers crash, stall, or come back late. Redis is the only stateful dependency, and every state transition is a single atomic Lua script.
+Relay is a distributed task engine in Go. Clients submit jobs over gRPC, a
+pool of workers long-polls for them, and the coordinators keep every job's
+state transitions **exactly-once**, through worker crashes, stalls,
+network partitions, and coordinator failover. State lives either in Redis
+(one atomic Lua script per transition) or in a **Raft-replicated state
+machine** spread across 3 or 5 coordinators, with no external dependency.
 
-The project puts correctness under failure and honest measurement ahead of feature count. Every failure mode listed below has an automated test that kills, pauses, or restarts real containers and then checks the final job states.
+The claims are checked, not just asserted. A seeded chaos harness kills,
+pauses and partitions real containers while recording Jepsen-style
+histories. A checker then verifies every invariant plus per-job
+linearizability (porcupine), and it is shown to catch a deliberately
+injected fencing bug. The benchmarks compare Relay against
+[asynq](https://github.com/hibiken/asynq) on the same workloads and
+report the results as measured, including where Relay loses.
 
+**[DESIGN.md](DESIGN.md)** is the full RFC: architecture, data model,
+lease and fencing design, delivery semantics, the soft-state lease
+argument for Raft, a failure-mode table, alternatives, limitations, and a
+decision log.
+
+- [30-second tour](#30-second-tour)
 - [Architecture](#architecture)
-- [Delivery semantics](#delivery-semantics)
-- [Failure modes](#failure-modes)
-- [Running it](#running-it)
-- [Testing](#testing)
-- [Benchmark](#benchmark)
-- [Design notes and limits](#design-notes-and-limits)
+- [Quickstart](#quickstart)
+- [Correctness](#correctness)
+- [Benchmarks](#benchmarks)
+- [Observability](#observability)
+- [Repository map](#repository-map)
+
+## 30-second tour
+
+- **Leases with fencing tokens.** A worker reports a result with
+  `(worker_id, lease_token)`. The store applies it only if that token is
+  still current, so a zombie worker's late result is rejected
+  (`ABORTED`), never written. Tokens are a per-job counter on Redis and
+  the Raft log index of the granting entry on Raft.
+- **At-least-once execution, exactly-once transitions, idempotent
+  submission.** These are stated precisely in
+  [DESIGN §5](DESIGN.md#5-delivery-semantics).
+- **Raft without heartbeat writes.** Lease deadlines and worker liveness
+  are soft state on the leader. Only `ExpireLease(job, token)` is
+  replicated, and a new leader grants everyone a full grace period. The
+  argument for why that is safe is in
+  [DESIGN §7](DESIGN.md#7-raft-integration-and-the-soft-state-lease-argument).
+- **Leader-following clients.** Followers answer `NOT_LEADER` with the
+  leader's address. Workers, `relayctl` and the benchmarks follow it, and
+  they never blindly replay a call whose outcome is unknown.
+- **Pluggable store.** One `Store` interface, two backends, and one
+  conformance suite that both pass.
 
 ## Architecture
 
@@ -20,248 +57,283 @@ flowchart LR
         CLI[relayctl]
         BENCH[relay-bench]
     end
-    subgraph coordinator
-        JS[JobService]
-        WS[WorkerService]
-        N[Notifier<br/>FIFO wake-ups]
-        L[Liveness loops<br/>failure detector + reaper]
-        M[/metrics + pprof/]
+    subgraph workers
+        W1[worker] & W2[worker] & W3[worker]
     end
-    subgraph redis[Redis 7]
-        R[(ready ZSET<br/>leases ZSET<br/>job hashes + history<br/>idempotency keys<br/>worker registry<br/>dead-letter ZSET)]
+    subgraph raft["coordinators (Raft)"]
+        L[leader<br/>JobService · WorkerService<br/>FSM + soft leases]
+        F1[follower<br/>FSM replica]
+        F2[follower<br/>FSM replica]
+        L -- replicate log --> F1 & F2
     end
-    W1[worker 1] & W2[worker 2] & W3[worker N]
-
-    CLI -- SubmitJob / GetJob --> JS
-    BENCH -- SubmitJob --> JS
-    BENCH -- scrape --> M
-    W1 & W2 & W3 -- Register / Heartbeat / AcquireJob long-poll / Complete / Fail --> WS
-    JS -- submit.lua --> R
-    JS -- Signal --> N
-    N -- wake one waiter --> WS
-    WS -- acquire / heartbeat / complete / fail.lua --> R
-    L -- expire_workers / reap.lua --> R
+    subgraph obs[observability]
+        J[Jaeger]
+        P[Prometheus] --> G[Grafana]
+    end
+    CLI & BENCH -- SubmitJob / GetJob --> L
+    W1 & W2 & W3 -- Register · Heartbeat · AcquireJob long-poll · Complete/Fail --> L
+    F1 -. NOT_LEADER + leader address .-> W1
+    L -. OTLP traces .-> J
+    P -. scrape /metrics .-> L & F1 & F2
 ```
-
-There are three binaries plus a benchmark tool:
 
 | Binary | Role |
 |---|---|
-| `coordinator` | gRPC server (`JobService` and `WorkerService`), the long-poll dispatcher, the failure detector and the lease reaper. It keeps no durable state in memory, so a restart loses nothing. |
-| `worker` | Registers, heartbeats, and runs `--concurrency` acquire→run→report loops. It ships with three handlers: `noop`, `sleep` and `fail-n-times`. On SIGTERM it stops acquiring and drains in-flight jobs. |
-| `relayctl` | CLI with four commands: `submit [--wait]`, `get <id>` (which includes the job's transition history), `workers` and `health`. |
-| `relay-bench` | Starts a compose cluster, drives load, scrapes coordinator metrics, and writes `bench/results/<timestamp>.json`. |
+| `coordinator` | gRPC server (`JobService`, `WorkerService`, `ClusterService`), long-poll dispatch, failure detector, lease reaper. `--store redis` or `--store raft` |
+| `worker` | registers, heartbeats, runs `--concurrency` acquire→run→report loops (`noop`, `sleep`, `fail-n-times`), drains on SIGTERM |
+| `relayctl` | `submit [--wait]`, `get`, `workers`, `health`, `cluster status\|add\|remove` |
+| `relay-chaos` | seeded chaos runs plus the history checker |
+| `relay-bench` | comparative benchmarks (`compare`) and charts (`plot`) |
+| `asynq-worker` | the asynq baseline, with the same handlers and the same timing hooks |
 
-### Job lifecycle
+## Quickstart
 
-```mermaid
-stateDiagram-v2
-    [*] --> PENDING: SubmitJob
-    PENDING --> LEASED: AcquireJob (attempts++, lease_token++)
-    LEASED --> SUCCEEDED: CompleteJob (owner+token match)
-    LEASED --> PENDING: FailJob retryable, attempts < max (backoff)
-    LEASED --> PENDING: worker declared dead / lease expired (attempts < max)
-    LEASED --> FAILED: FailJob non-retryable
-    LEASED --> DEAD: attempts exhausted
-    SUCCEEDED --> [*]
-    FAILED --> [*]
-    DEAD --> [*]
-```
-
-### Dispatch path
-
-```mermaid
-sequenceDiagram
-    participant W as Worker slot
-    participant C as Coordinator
-    participant N as Notifier
-    participant R as Redis
-    participant S as Submitter
-    W->>C: AcquireJob(worker_id)
-    C->>N: Subscribe (before checking Redis)
-    C->>R: EVALSHA acquire.lua
-    R-->>C: EMPTY
-    Note over C,N: blocks on waiter (≤ 5s poll timeout)
-    S->>C: SubmitJob
-    C->>R: EVALSHA submit.lua
-    C->>N: Signal(1)
-    N-->>C: wake oldest waiter
-    C->>R: EVALSHA acquire.lua
-    R-->>C: job, lease_token, eligible_at, redis_now
-    C-->>W: job (latency recorded)
-    W->>W: run handler
-    W->>C: CompleteJob(job_id, worker_id, lease_token, result)
-    C->>R: EVALSHA complete.lua (fenced)
-```
-
-`AcquireJob` subscribes to the notifier **before** it checks Redis. That removes the lost-wake-up race: a submit that lands between the check and the wait still finds the waiter in the queue. Each submit wakes one waiter, not all of them, so there is no thundering herd. When the acquire script leases a job, it also reports whether another job is already eligible, and if so the coordinator passes the wake-up on to the next waiter. Retries that become eligible in the future arm a single timer, set for the earliest deadline.
-
-### Redis layout
-
-| Key | Type | Purpose |
-|---|---|---|
-| `relay:ready` | ZSET | job id scored by eligible-at (ms). Backoff retries are scored in the future. |
-| `relay:leases` | ZSET | job id scored by lease expiry (ms); the reaper scans it |
-| `relay:job:{id}` | HASH | id, type, payload, idempotency_key, status, attempts, max_attempts, lease_owner, lease_expires_at, lease_token, created_at, enqueued_at, leased_at, finished_at, last_error, result |
-| `relay:job:{id}:events` | LIST | transition history, appended by the script that made each transition |
-| `relay:idem:{key}` | STRING | idempotency key → job id (`SET NX`) |
-| `relay:workers` | ZSET | live worker id scored by last heartbeat |
-| `relay:worker:{id}` / `:jobs` | HASH / SET | worker metadata, plus the leases it holds (used for immediate requeue on death) |
-| `relay:dead` | ZSET | dead-letter set |
-
-The scripts are embedded with `go:embed`, preloaded with `SCRIPT LOAD`, and run with `EVALSHA`, falling back to `EVAL` after a Redis restart. Every timestamp and every piece of lease math comes from `redis.call('TIME')`, so a coordinator with a skewed clock cannot break a lease.
-
-## Delivery semantics
-
-Relay gives **at-least-once execution** and **exactly-once state transitions**. These are two different guarantees.
-
-**Execution is at-least-once.** A job can run more than once. Suppose a worker crashes, stalls or is partitioned partway through a job. The coordinator cannot tell "dead" from "slow", so it revokes the lease and gives the job to another worker. The first worker may in fact still be running it. Handlers therefore have to be idempotent, or at least tolerate being re-run. That cost is unavoidable: a system that never re-runs work has to accept losing jobs instead.
-
-**State transitions are exactly-once.** A job reaches a terminal state exactly once, and its result is written exactly once. Fencing tokens enforce this:
-
-1. Each lease gets a `lease_token` from a per-job counter that increases monotonically and is never reset.
-2. `CompleteJob` and `FailJob` carry `(worker_id, lease_token)`. The Lua script applies them only if the job is still `LEASED` to that owner with that token. The check and the write happen in the same atomic script.
-3. Once a lease is revoked and the job is re-leased, the old holder's token no longer matches. Its late result is rejected with gRPC `ABORTED`, and the worker logs `stale lease, dropping result` and moves on.
-4. A *retried* report on the same lease, for example after a network blip, returns `already_completed` instead of being applied twice.
-
-Every transition appends to the job's history in the same script that performs it. The integration tests use that history to assert that each job has exactly one terminal event.
-
-**Submission is idempotent.** `SubmitJob` with an idempotency key that has already been seen returns the original job id (`duplicate=true`) and never creates a second job. The `SET NX` and the job creation happen in the same script. Clients can therefore retry a submit safely through timeouts and coordinator restarts.
-
-## Failure modes
-
-| Failure | What happens | Why it is safe | Test |
-|---|---|---|---|
-| **Worker crashes** (`docker kill`) | The worker stops heartbeating. After `missed-heartbeats × heartbeat-interval` (default 3 × 1s), the failure detector declares it dead and requeues every job it held at once (`attempts` was already incremented at lease time). Another worker picks the job up. | Requeueing is atomic with declaring the worker dead. A dead worker cannot acquire or renew anything until it re-registers under a new id. | `TestWorkerKilledMidJob` |
-| **Worker stalls and comes back** (`docker pause`, GC pause, partition) | It is declared dead and its job is reassigned under a higher lease token. When it resumes, its heartbeat is rejected (`FAILED_PRECONDITION`) and it re-registers. Its late `CompleteJob` is rejected with `ABORTED`. | Fencing: the stale token doesn't match, so the stored result, owner and `finished_at` stay untouched. | `TestPausedWorkerIsFencedOut`, `TestZombieResultRejected` |
-| **Lease expires without the worker being declared dead** | The reaper, which runs every 500ms, finds the lease in `relay:leases` and requeues the job. | This is the backstop for any lease the detector doesn't cover. Revocation and requeue happen in one script. | `TestExpiredLeaseReapedWhileWorkerAlive`, `TestReapExpiredLeases` |
-| **AcquireJob response lost** (worker cancels mid-call or the connection drops) | If the coordinator sees the cancel, it releases the lease immediately and undoes the attempt. If it doesn't, the worker never learns about the lease and never reports it in a heartbeat. Heartbeats renew **only leases the worker reports holding**, so this lease expires and gets reaped. | A lease nobody is running can't be kept alive forever by an unrelated heartbeat. | `TestReleaseUndoesAttempt`, `TestHeartbeatRenewsOnlyReportedLeases` |
-| **Coordinator crashes and restarts** | All state is in Redis. Workers' long-polls and reports fail with `UNAVAILABLE` and retry with backoff. gRPC reconnects within about 1s of the restart. Detection and reaping wait out a startup grace period, so workers aren't declared dead because their heartbeat timestamps went stale during the outage. | No transition depends on in-process state. Grace affects efficiency only, never safety, because fencing still guards every result. | `TestCoordinatorRestart` |
-| **Client retries a submit** | The same idempotency key returns the same job id. | `SET NX` and job creation are atomic. | `TestIdempotentSubmissions`, `TestSubmitIdempotent` |
-| **Worker retries a report** | The same token returns `already_completed`, and the result is not rewritten. | `reported_token` records which lease reported. | `TestCompleteFencing` |
-| **Handler keeps failing** | A retryable error is retried with exponential backoff and equal jitter (`delay ∈ [d/2, d]`, `d = base·2^(attempt−1)`, capped). Once `max_attempts` is used up the job goes to `DEAD` and into `relay:dead`. A non-retryable error goes straight to `FAILED`. | Backoff lives in the `ready` ZSET score, on Redis time. | `TestFailNTimesRetriesThenSucceedsOrDies`, `TestFailRetryWithBackoff` |
-| **Clock skew between coordinator and Redis** | Has no effect on correctness. All lease and backoff math uses Redis `TIME` inside the scripts. The latency metric uses only same-clock intervals (see [Benchmark](#benchmark)). | There is a single time source for state. | (by construction) |
-| **Worker gets SIGTERM** | It stops acquiring, keeps heartbeating while in-flight jobs finish and report, then exits. Jobs still running after `--shutdown-timeout` are abandoned, and their leases lapse and are requeued. | In-flight leases stay renewed during the drain. | `TestGracefulShutdownDrainsInFlight`, `TestShutdownTimeoutAbandonsJobs` |
-| **Redis crashes** | **Not handled, by design.** Redis is the single point of failure. Compose runs it with AOF `appendfsync everysec`, so a crash loses at most about 1s of acknowledged transitions. Those jobs can re-run (at-least-once), but a lost `SUCCEEDED` would be re-executed. | This is the explicit scope boundary. Replication or Sentinel would be the next step. | — |
-
-No failure in this table needs an operator to step in. Orphaned jobs always come back through either the detector or the reaper.
-
-## Running it
-
-You need Go 1.26+ (older toolchains download it automatically through `GOTOOLCHAIN`) and Docker (Docker Desktop, OrbStack or colima).
+You need Go 1.26+ and a Docker-compatible runtime (Docker Desktop,
+OrbStack, colima).
 
 ```sh
-# Start Redis, the coordinator and 3 workers (4 slots each)
-docker compose -f deploy/docker-compose.yml up -d --build --scale worker=3
+make up                     # 3 Raft coordinators + 3 workers + Jaeger, Prometheus, Grafana
+go run ./cmd/relayctl --coordinator n1=localhost:50051,n2=localhost:50052,n3=localhost:50053 cluster status
+go run ./cmd/relayctl --coordinator localhost:50051 submit --type fail-n-times --payload '{"n":1}' --max-attempts 3 --wait
+open http://localhost:3000  # Grafana "Relay" dashboard; traces at http://localhost:16686
+make down
 
-go run ./cmd/relayctl workers
-go run ./cmd/relayctl submit --type sleep --payload '{"duration_ms":500}' --wait
-go run ./cmd/relayctl submit --type fail-n-times --payload '{"n":2}' --max-attempts 5 --wait
-go run ./cmd/relayctl submit --type noop --idempotency-key order-42   # run twice: same id
-go run ./cmd/relayctl get <job-id>
-
-docker compose -f deploy/docker-compose.yml down -v
+make test                   # unit tests, Store conformance on both backends (-race)
+make integration            # container failure tests, Raft failover and membership, chaos self-tests
+make chaos SEED=1           # 5-minute seeded chaos run on Raft (BACKEND=redis for Redis)
+make bench                  # Relay-Redis vs Relay-Raft vs asynq (~1.5h; see BENCH_ARGS in the Makefile)
 ```
 
-Each flag also reads an environment variable: the flag name in upper case with a `RELAY_` prefix, so `--lease-duration` becomes `RELAY_LEASE_DURATION`. A flag given on the command line always wins over the variable. These are the coordinator's main settings:
+`make up BACKEND=redis` runs the Redis backend instead. Every flag can
+also be set through an environment variable: `RELAY_` plus the flag name
+in upper case (`--lease-duration` → `RELAY_LEASE_DURATION`).
 
-| Flag | Default | |
-|---|---|---|
-| `--lease-duration` | 10s | lease length; every heartbeat renews it |
-| `--heartbeat-interval` | 1s | how often workers heartbeat and the detector runs |
-| `--missed-heartbeats` | 3 | a worker is dead after this many intervals of silence |
-| `--poll-timeout` | 5s | AcquireJob long-poll bound |
-| `--backoff-base` / `--backoff-max` | 200ms / 30s | retry backoff |
-| `--default-max-attempts` | 3 | |
-| `--redis-pool-size` | 256 | needs headroom for concurrent long-polls |
+## Correctness
 
-## Testing
+`relay-chaos run --seed N --duration 5m --faults all` brings up a cluster,
+runs concurrent submitters with about 10% duplicate idempotency keys
+against `sleep` and `fail-n-times` workers, and injects faults on a
+schedule derived only from the seed:
+- worker kill, pause and partition
+- coordinator kill, pause, restart, client isolation and backend partition
+- on Raft: leader kill, leader pause, leader partition (the old leader
+  stays reachable by clients but is cut off from its peers), and
+  full-cluster restart
+- Toxiproxy latency and jitter between workers and coordinators
 
-```sh
-make test         # unit tests with -race; Lua scripts run against real Redis via testcontainers
-make integration  # multi-container failure scenarios via docker compose
-```
+It heals everything, waits for quiescence, freezes the workers, and checks:
 
-**Unit tests** (`internal/...`) run every Lua script against a real Redis 7 container. They cover acquire, renewal of reported versus unreported leases, complete with a valid token, a stale token and a retried call, fail→retry with the backoff bounds checked, `max_attempts`→DEAD, non-retryable→FAILED, 50 concurrent duplicate submits, reaper requeue, dead-worker requeue, and release. The coordinator tests use an in-process gRPC server and cover long-poll wake-up, timeouts, the many-waiters case, and `ABORTED` on a stale lease. The worker tests run real worker loops end to end, including graceful drain, shutdown timeout, and an in-process zombie.
-
-**Integration tests** (`test/integration`, build tag `integration`) each start their own compose project with Redis, a coordinator and at least 3 workers, and assert final job states through `GetJob`:
-
-| Test | Scenario |
+| Invariant | Checked against |
 |---|---|
-| `TestWorkerKilledMidJob` | `docker kill` the worker running a job; the job is reassigned and reaches SUCCEEDED with exactly one terminal transition |
-| `TestPausedWorkerIsFencedOut` | `docker pause` a worker until its job completes elsewhere, then `docker unpause`; the zombie's completion is rejected, logged and dropped, and the result is intact |
-| `TestCoordinatorRestart` | kill and restart the coordinator mid-run while submits retry with idempotency keys; 300 jobs, none lost or duplicated |
-| `TestIdempotentSubmissions` | 1,000 concurrent submits, 10% duplicate keys → exactly 900 jobs, all SUCCEEDED |
-| `TestFailNTimesRetriesThenSucceedsOrDies` | `fail-n-times` succeeds after backoff, with gaps checked against the backoff bound, or ends DEAD in the dead-letter set |
+| no acknowledged submission lost | client acks vs final reads |
+| every job terminal after quiescing | final state |
+| at most one terminal transition; result written once | server event log, and accepted reports per lease token |
+| every accepted report carried the current token | server log (latest LEASED) and real-time client order |
+| duplicate keys map to one job | client acks and the stored key |
+| attempts ≤ max; DEAD only at max | final state and event log |
+| per-job linearizability | porcupine, with a nondeterministic model of transitions clients never see |
 
-Tests never sleep for a fixed time where they can poll a condition with a timeout instead.
+A failing run saves the history and a Porcupine visualization, and the
+same seed reproduces the same fault schedule.
 
-## Benchmark
+**Results.** On the Raft backend, **20 seeds × 5 minutes, every fault kind: 0
+violations.** That is 158,273 jobs and 1,145,068 recorded operations
+under 1,100 injected faults, including 59 leader
+kills, 66 minority-side leader partitions and
+52 full-cluster restarts. There were 379
+leader elections, and 2,305 zombie reports were fenced out.
+Per-seed numbers are in [DESIGN §9](DESIGN.md#9-verification) and
+`bench/results/chaos-sweep-raft.json`. The Redis backend passes the same
+harness (minus the leader faults; Redis itself is never faulted,
+[DESIGN §8](DESIGN.md#8-failure-modes)).
 
-**Target:** p95 scheduling latency under 25 ms with 100 worker slots and 5,000 queued jobs.
+**The checker catches real bugs.** Building with `-tags relay_nofence`
+removes the token check from both backends. `make integration` runs that
+build under worker pauses and partitions, and asserts the checker reports
+fencing violations and non-linearizable jobs, with visualizations, while
+every other invariant stays clean. Across the runs so far, each one flagged 12–19 fencing
+violations and 9–10 non-linearizable jobs. Building the harness found
+three real problems, all in the harness itself, each fixed at the root
+and recorded in [DESIGN §12](DESIGN.md#12-decision-log):
+- a final-snapshot race (fixed with a freeze hand-off)
+- a backwards step of the VM's wall clock (histories now use
+  `CLOCK_MONOTONIC`)
+- a scheduler bug in overlapping fault windows
 
-**Definition.** For each assignment, scheduling latency is the time the job was handed to a worker minus max(time the job became eligible, time that worker's `AcquireJob` request arrived). It measures the scheduler's own dispatch overhead and leaves out time a job spends waiting because every worker is busy. That waiting is reported separately as *queue wait* (`leased_at − enqueued_at`).
+## Benchmarks
 
-**Measurement.** The coordinator records the metric itself and aggregates it in an HdrHistogram (1 µs to 5 min range, 3 significant digits). No interval mixes two clocks:
+All numbers are from one run of `make bench`
+([`bench/results/compare-20261026T085821Z.json`](bench/results/compare-20261026T085821Z.json),
+charts alongside). The setup:
+- **Hardware:** Apple M4 Pro (14 cores, 24 GB), macOS 26.6.2, go1.26.1.
+- **Container runtime:** Docker Desktop 29.9.2, with
+  14 CPUs and 7.7 GB for its VM.
+- **Shared host:** every container (store, coordinators, workers, load
+  driver) runs on that one machine, so there are no real network hops.
+- **Configuration:** each backend's failure-detection settings are
+  recorded in the results file.
 
-```
-latency = min( handoff − request_arrival,                                   # coordinator monotonic clock
-               (handoff − acquire_script_call) + (redis_now − eligible_at) ) # coordinator clock + Redis clock
-```
+| backend | throughput at saturation | dispatch latency p50 / p95 / p99 (ms) | end-to-end queue wait p50 / p95 / p99 (ms) | submit RTT p50 / p95 / p99 (ms) | worker-failure recovery p50 / p90 / max | leader failover p50 / p90 / max |
+|---|---|---|---|---|---|---|
+| **relay-redis** | 12,439 | 0.52 / 0.74 / 0.96 | 0.52 / 0.74 / 0.96 | 0.34 / 0.52 / 0.72 | 2.83s / 3.77s / 3.81s (n=30) | — |
+| **relay-raft** | 4,474 | 4.84 / 8.45 / 12.41 | 4.84 / 8.45 / 12.41 | 3.06 / 5.67 / 8.44 | 3.70s / 3.78s / 3.81s (n=30) | 2.50s / 2.85s / 3.55s (n=30) |
+| **asynq** | 12,889 | 1.02 / 143.32 / 277.02 | 75.43 / 273.59 / 350.91 | 0.20 / 0.43 / 0.73 | 108.02s / 131.59s / 149.36s (n=30) | — |
+| **asynq-tuned** | 12,540 | 1.01 / 3.10 / 4.42 | 1.01 / 3.10 / 4.42 | 0.16 / 0.32 / 0.49 | — | — |
 
-The second term starts at the moment the script call was *sent*, not when Redis ran it. It therefore includes the request's network leg, so the reported number errs high. relay-bench resets the histograms after a warm-up and scrapes `GET /metrics` when the run ends.
+![throughput](bench/results/compare-20261026T085821Z/throughput.png)
+![dispatch latency](bench/results/compare-20261026T085821Z/dispatch_latency.png)
+![queue wait](bench/results/compare-20261026T085821Z/queue_wait.png)
+![worker recovery](bench/results/compare-20261026T085821Z/worker_recovery.png)
+![leader failover](bench/results/compare-20261026T085821Z/leader_failover.png)
 
-```sh
-make bench                                      # burst + steady, 10 containers x 10 slots, 5,000 sleep(20ms) jobs
-go run ./cmd/relay-bench --modes preload        # enqueue all 5,000 first, then start the workers
-go run ./cmd/relay-bench --profile              # also save a coordinator CPU profile per run
-```
+**Correctness under faults.** Each backend ran the same 2-minute
+workload: 20 sleep jobs/s on 4 workers × 4 slots, while seeded faults
+(seed 1) killed, paused or partitioned workers for 2–10s at a time. The
+test then waited for every acknowledged job to finish.
 
-The run modes are:
+| backend | faults | acked jobs | lost | unfinished | duplicate executions | duplicate terminal transitions |
+|---|---|---|---|---|---|---|
+| relay-redis | 18 | 2,460 | 0 | 0 | 45 | 0 |
+| relay-raft | 18 | 2,464 | 0 | 0 | 45 | 0 |
+| asynq | 18 | 2,460 | 0 | 0 | 8 | not observable |
 
-- **burst** submits as fast as 32 concurrent clients can while workers are already running.
-- **steady** submits at `--rate` jobs/s (default 2,000/s).
-- **preload** stops the workers, enqueues every job, then starts the workers. This is the literal "5,000 queued jobs" case.
+### Workloads and definitions
 
-### Results
+- **Workers.** Every backend gets the same worker containers (10 × 10
+  slots), the same handlers (`noop` and `sleep`) and the same Redis
+  configuration (AOF, `everysec`). asynq runs with its default
+  configuration (**asynq**) and with `TaskCheckInterval=10ms`
+  (**asynq-tuned**), so its default polling interval is not the only
+  thing on show. asynq is driven through its own client, server, mux,
+  `TaskID` and `MaxRetry` APIs.
+- **Throughput at saturation.** 20,000 `noop` jobs are preloaded with no
+  workers running, then all 10 workers start. Throughput is jobs ÷ (last
+  handler end − first handler start). This measures scheduling cost per
+  job, because there is no work in the jobs.
+- **Dispatch latency, one definition for every backend.** This is the
+  project's existing definition, "assignment time minus max(job eligible
+  time, worker request time)", observed from outside so asynq can be
+  measured too:
+  - *assignment* is the handler start;
+  - *eligible* is when the driver invoked the submit;
+  - *worker request* is when a slot on that worker became free, simulated
+    FIFO from that worker's handler start/end events.
 
-These numbers come from one run of `go run ./cmd/relay-bench --modes burst,steady,preload`, and the raw output is in [`bench/results/20261026T053700Z.json`](bench/results/20261026T053700Z.json).
+  Every timestamp comes from `CLOCK_MONOTONIC` inside the one Docker VM.
+  The load is 30,000 `sleep(20ms)` jobs at a steady 500/s, about 10% of
+  capacity.
+- **End-to-end queue wait.** Handler start minus submit invoked.
+- **Worker-failure recovery.** Trials use 4 workers × 2 slots, 4 jobs of
+  8s each, so there is spare capacity. In each trial a worker holding at
+  least one job is killed with `docker kill`. Recovery runs from the
+  container's death time (Docker's own clock) to the last of its jobs
+  starting on another worker (the worker's wall clock, the same VM).
+  There are 30 trials per backend.
+- **Leader failover** (Raft only). Under a steady trickle of 50 jobs/s,
+  the leader is killed with `docker kill`. Failover runs to the first
+  `AcquireJob` that was *sent after the kill* and returned a job, which
+  only a new leader can grant. The node is restarted and the cluster
+  rejoins between trials. There are 30 trials.
 
-- **Host:** Apple M4 Pro (14 cores, 24 GB), macOS 26.6.2, Go 1.26.1.
-- **Docker:** OrbStack (Docker 29.8.2), with 14 CPUs and 11.7 GB available to the VM.
-- **Cluster:** 10 worker containers × 10 slots = 100 slots. Each run is 5,000 `sleep` jobs of 20 ms after 500 warm-up jobs. Redis, the coordinator and all workers share the same machine.
+### What the numbers say, including where Relay loses
 
-**Scheduling latency** (the target metric, measured by the coordinator):
+- **Throughput: asynq wins, narrowly against Relay-Redis and clearly
+  against Relay-Raft.** asynq dequeues straight from Redis inside its
+  worker process. Relay adds a gRPC hop through the coordinator per
+  acquire and per report, and still lands within 4%
+  (12,439 vs 12,889 jobs/s).
+  **Relay-Raft is about 3× slower**
+  (4,474 jobs/s). Every
+  acquire and every completion is a Raft log entry, replicated to a
+  majority and fsynced by bbolt before it is applied. That is the price
+  of having no single point of failure, and it is the main
+  [known limitation](DESIGN.md#11-known-limitations) of the replicated
+  design.
+- **Dispatch latency: Relay-Redis is fastest; asynq's default is
+  dominated by its poll interval.** With an empty queue, an asynq server
+  sleeps for `TaskCheckInterval` (1s by default) between dequeue
+  attempts, so jobs pile up during a sleep and then drain in a burst.
+  Jobs that waited through a sleep, while slots sat idle, show up in the
+  p95/p99 (143 / 277 ms). Jobs drained in the burst waited only for
+  slots, which the definition excludes, which is why the p50 is 1 ms. The
+  end-to-end queue wait (p50 75 ms) shows the full cost. With a 10 ms
+  interval, asynq-tuned is close to Relay-Redis: 1.01 vs 0.52 ms p50,
+  and 4.4 vs 0.96 ms p99. Relay's long-poll plus FIFO notifier hands a
+  job to an already-waiting worker without polling. Relay-Raft's ~5 ms
+  p50 is the log commit on submit and on acquire (see submit RTT: 3 ms).
+- **Recovery from a dead worker: Relay is about 30–40× faster.** Relay
+  declares a worker dead after 3 missed 1s heartbeats and requeues its
+  jobs in the same atomic step. That takes 2.8–3.8s; the two modes come
+  from the detector's 1s tick. asynq waits for its fixed 30s lease to
+  expire, then *another* 30s (its clock-skew allowance), then for its
+  recoverer, which runs every 60s. The reclaimed task then waits a
+  sidekiq-style retry delay of 15–44s. That gives the measured
+  81–149s.
+- **Leader failover (Relay-Raft): 2.5s median, 3.6s worst.** That is
+  Raft's 1s heartbeat timeout plus a randomized election, the new
+  leader's `Barrier`, and clients following `NOT_LEADER` to it. Raft's
+  timeouts can be lowered at the cost of spurious elections on a loaded
+  host.
+- **Faults: no backend lost a job, and Relay records zero duplicate
+  terminal transitions.**
+  - Relay re-ran more jobs (45 vs 8). Detecting failure in 3s means a
+    worker paused or partitioned for 2–10s gets its jobs reassigned while
+    it is still running them. That trade, faster recovery for more
+    duplicate executions, is inherent to at-least-once execution, and
+    fencing is what keeps it from becoming a duplicate *completion*.
+  - asynq waits out short pauses because of its 30s lease. For the
+    duplicates it does have, it records no transition history, so
+    whether a zombie's completion was also accepted cannot be checked.
+    Its worker checks its lease against its *own* clock before writing,
+    and Redis checks no token
+    ([DESIGN §10](DESIGN.md#10-alternatives-considered)).
 
-| Mode | p50 | p95 | p99 | max | Target p95 < 25 ms |
-|---|---|---|---|---|---|
-| burst | 0.42 ms | **1.69 ms** | 4.42 ms | 12.13 ms | met |
-| steady (2,000/s) | 0.08 ms | **0.18 ms** | 1.31 ms | 18.27 ms | met |
-| preload (5,000 queued, then workers start) | 0.34 ms | **1.27 ms** | 1.87 ms | 2.59 ms | met |
+**A note on Relay's internal metric.** The coordinator's own dispatch
+latency, the project's original metric
+([details](#relays-coordinator-measured-latency)), reports Relay-Redis at
+p50 0.15 / p95 1.16 / p99 1.23 ms.
+That is lower at the median than the external number, because it starts
+when the job is eligible inside Redis rather than at submit, but *higher*
+at p95. Its `redis_now − eligible_at` term uses Redis `TIME` truncated to
+whole milliseconds, so a 0.1 ms wait can count as 1 ms. The internal
+queue wait shows the quantization directly: p50 0.00 ms,
+p95 1.00 ms. The definition is unchanged; this is a
+resolution limit, documented in
+[DESIGN §11](DESIGN.md#11-known-limitations). On Raft the internal metric
+is p50 4.11 / p99 11.24 ms.
 
-**Queue wait and throughput:**
+### Relay's coordinator-measured latency
 
-| Mode | queue wait p50 | queue wait p95 | throughput | acquire.lua RTT p95 |
-|---|---|---|---|---|
-| burst | 465 ms | 889 ms | 4,301 jobs/s | 1.72 ms |
-| steady | 0 ms | 0 ms | 1,977 jobs/s (= offered load) | 0.19 ms |
-| preload | 2,402 ms | 2,847 ms | 1,717 jobs/s* | 1.26 ms |
+`make bench-relay` runs the original single-backend benchmark (burst,
+steady and preload modes against Relay-Redis, with latency measured by
+the coordinator). Its last result is
+[`bench/results/20261026T053700Z.json`](bench/results/20261026T053700Z.json):
+p95 scheduling latency of 1.69 ms in burst mode, 0.18 ms in steady mode
+and 1.27 ms in preload mode, against a target of 25 ms.
 
-\*The preload makespan includes starting the 10 worker containers after the queue was filled.
+## Observability
 
-How to read these numbers:
+- **Tracing.** Each job is one trace:
+  `SubmitJob → relay.enqueue → relay.dispatch → relay.execute (worker) → CompleteJob`.
+  Each retry shows up as its own dispatch/execute branch. The submit's W3C
+  traceparent is stored with the job to bridge the queue, and otelgrpc
+  carries context across the RPCs.
+- **Prometheus at `/metrics`.** It exposes dispatch latency, queue wait,
+  queue depth, active leases, lease expirations, reassignments,
+  stale-completion rejections, Raft commit latency, leader changes and
+  leadership.
+- **Grafana.** The "Relay" dashboard in `deploy/grafana` is provisioned
+  automatically by `make up`.
 
-- **Scheduling latency tracks the round-trip time of the acquire Lua script.** The two distributions are nearly identical in every mode, so the dispatch path adds almost nothing beyond one `EVALSHA`. Wake-up through the in-process notifier is not a measurable cost.
-- **Queue wait is where backlog shows up, as it should.** In burst mode, 5,000 jobs land in about 0.2 s on 100 slots, and each job runs for 20 ms. That makes queue wait close to `position / 100 × 20 ms`. The scheduling-latency definition deliberately leaves out this time, because it is the workers being busy rather than the scheduler being slow.
-- **Burst throughput is 4,301 jobs/s, or 86% of the theoretical ceiling.** That ceiling is 100 slots ÷ 20 ms = 5,000 jobs/s. The remaining 14% is the complete→acquire round-trip each slot pays between jobs.
-- **Queue wait is recorded in whole milliseconds.** It is computed on Redis time, so in steady mode, where a polling worker takes each job almost immediately, it rounds to 0.
-- **The target was met without any tuning.** No profiling-driven changes were needed. `--profile` saves a coordinator CPU profile for anyone who wants to dig further. These figures come from one machine, where everything shares the CPU. On separate hosts, scheduling latency would gain a real network RTT on the script call.
+## Repository map
 
-## Design notes and limits
-
-- **Attempts are counted at lease time.** `attempts` is incremented when a job is leased, and checked against `max_attempts` whenever a lease ends without success. That is equivalent to "requeue increments attempts". `fail-n-times` with `n ≥ max_attempts` therefore ends DEAD. A lease handed back because its AcquireJob response could not be delivered does not count as an attempt.
-- **Heartbeats renew only the leases the worker reports holding.** If renewal used the server-side set instead, a worker that never received an AcquireJob response would keep that phantom lease alive forever.
-- **A worker doesn't cancel a handler when its lease is lost.** It lets the handler finish, and fencing rejects the result. That is simpler and just as safe. Cancelling would only save work.
-- **Scripts build keys dynamically.** acquire and reap only learn job ids at run time, so the scripts build `relay:job:{id}` keys themselves. That is fine on standalone Redis but not Redis Cluster safe.
-- **Idempotency keys never expire.** A production system would put a TTL on them.
-- **Single coordinator.** All dispatch state is in Redis, but the in-process notifier means a second coordinator would not be woken by the first one's submits. Its pollers would still find work when they wake on their next poll timeout, or immediately via Redis pub/sub if that were added.
+| Path | |
+|---|---|
+| `internal/store` | `Store` interface; `redis/` (Lua), `raft/` (FSM, soft leases, membership), `storetest/` (conformance) |
+| `internal/coordinator` | gRPC services, long-poll notifier, liveness loops, leadership handling |
+| `internal/rpc` | `DialCluster`: NOT_LEADER-following client |
+| `internal/history`, `internal/check` | Jepsen-style history recording and the checker |
+| `cmd/relay-chaos` | chaos orchestrator, workload, and fault schedule |
+| `cmd/relay-bench` | benchmarks (`compare`, `drive`, `plot`) |
+| `deploy/` | compose files (Redis, Raft, chaos, bench, observability), Grafana and Prometheus config |
+| `bench/results/` | committed results JSON and charts |

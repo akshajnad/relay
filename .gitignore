@@ -2,3 +2,4 @@ bin/
 bench/results/*.pprof
 *.test
 chaos-out
+bench/results/compare-*/*/
