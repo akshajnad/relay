@@ -26,6 +26,7 @@ import (
 	relayv1 "github.com/akshajnad/relay/gen/relay/v1"
 	"github.com/akshajnad/relay/internal/envflag"
 	"github.com/akshajnad/relay/internal/rpc"
+	"github.com/akshajnad/relay/internal/tracing"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -59,7 +60,7 @@ func run(args []string) error {
 		fs.Usage()
 		os.Exit(2)
 	}
-	conn, err := rpc.DialCluster(*addr)
+	conn, err := rpc.DialCluster(*addr, tracing.DialOption())
 	if err != nil {
 		return err
 	}

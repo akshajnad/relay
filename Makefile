@@ -29,13 +29,17 @@ build:
 test:
 	go test -race -count=1 ./internal/... ./cmd/...
 
-## up: start a local cluster (BACKEND=raft: 3 coordinators; BACKEND=redis: Redis + 1 coordinator)
+OBSERVABILITY := -f deploy/docker-compose.observability.yml
+
+## up: start a local cluster with Jaeger, Prometheus and Grafana
+##     (BACKEND=raft: 3 coordinators; BACKEND=redis: Redis + 1 coordinator)
 up:
-	docker compose -f $(COMPOSE_FILE_$(BACKEND)) up -d --build --wait --scale worker=$(WORKERS)
+	RELAY_OTLP_ENDPOINT=jaeger:4317 docker compose -f $(COMPOSE_FILE_$(BACKEND)) $(OBSERVABILITY) up -d --build --wait --scale worker=$(WORKERS)
+	@echo "Grafana http://localhost:3000  Jaeger http://localhost:16686  Prometheus http://localhost:9095"
 
 ## down: stop the local cluster and delete its volumes
 down:
-	docker compose -f $(COMPOSE_FILE_$(BACKEND)) --profile extra down -v --remove-orphans
+	docker compose -f $(COMPOSE_FILE_$(BACKEND)) $(OBSERVABILITY) --profile extra down -v --remove-orphans
 
 ## image: build the relay container image used by compose
 image:

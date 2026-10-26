@@ -28,6 +28,7 @@ import (
 	"github.com/akshajnad/relay/internal/store"
 	raftstore "github.com/akshajnad/relay/internal/store/raft"
 	redisstore "github.com/akshajnad/relay/internal/store/redis"
+	"github.com/akshajnad/relay/internal/tracing"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -47,7 +48,7 @@ func run() error {
 	scfg := store.DefaultConfig()
 	fs := flag.NewFlagSet("coordinator", flag.ExitOnError)
 	listen := fs.String("listen", ":50051", "gRPC listen address")
-	metricsListen := fs.String("metrics-listen", ":9090", "HTTP address for /metrics and /debug/pprof")
+	metricsListen := fs.String("metrics-listen", ":9090", "HTTP address for /metrics (Prometheus), /metrics.json and /debug/pprof")
 	storeKind := fs.String("store", "redis", "state backend: redis or raft")
 	redisAddr := fs.String("redis-addr", "localhost:6379", "Redis address")
 	rcfg := raftstore.DefaultConfig()
@@ -69,6 +70,8 @@ func run() error {
 	shutdownTimeout := fs.Duration("shutdown-timeout", 10*time.Second, "graceful shutdown limit")
 	logLevel := fs.String("log-level", "info", "debug|info|warn|error")
 	logFormat := fs.String("log-format", "json", "json|text")
+	otlp := fs.String("otlp-endpoint", "", "OTLP gRPC endpoint (host:port) for traces, e.g. jaeger:4317; empty disables tracing")
+	sample := fs.Float64("trace-sample-ratio", 1, "fraction of new traces to sample")
 	fs.DurationVar(&ccfg.PollTimeout, "poll-timeout", ccfg.PollTimeout, "AcquireJob long-poll timeout")
 	fs.DurationVar(&ccfg.HeartbeatInterval, "heartbeat-interval", ccfg.HeartbeatInterval, "worker heartbeat interval")
 	fs.DurationVar(&ccfg.ReapInterval, "reap-interval", ccfg.ReapInterval, "expired-lease sweep interval")
@@ -129,11 +132,33 @@ func run() error {
 		log.Error("THIS BINARY WAS BUILT WITH relay_nofence: FENCING IS DISABLED. It exists only to test the chaos checker.")
 	}
 
+	shutdownTracing, err := tracing.Setup(ctx, "relay-coordinator", *otlp, *sample)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = shutdownTracing(sctx)
+	}()
+
 	m := metrics.NewRegistry()
+	src := metrics.PromSources{QueueDepth: func(ctx context.Context) (int64, int64, error) {
+		d, err := st.QueueDepth(ctx)
+		return d.Pending, d.Leased, err
+	}}
+	if l, ok := st.(store.Leadership); ok {
+		src.IsLeader = l.IsLeader
+	}
+	prom := m.Prometheus(src)
+	if rs, ok := st.(*raftstore.Store); ok {
+		rs.SetCommitObserver(m.RaftCommit.Record)
+	}
 	c := coordinator.New(st, ccfg, m, log)
 
 	srv := grpc.NewServer(
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 5 * time.Second, PermitWithoutStream: true}),
+		tracing.ServerOption(),
 	)
 	c.Register(srv)
 	hs := health.NewServer()
@@ -143,7 +168,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	httpSrv := &http.Server{Addr: *metricsListen, Handler: m.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	httpSrv := &http.Server{Addr: *metricsListen, Handler: m.Handler(prom), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("metrics server", "err", err)

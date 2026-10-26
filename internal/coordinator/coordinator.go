@@ -173,5 +173,6 @@ func jobToProto(j *store.Job) *relayv1.Job {
 		FinishedAtMs:     j.FinishedAt,
 		LastError:        j.LastError,
 		Result:           j.Result,
+		TraceParent:      j.TraceParent,
 	}
 }

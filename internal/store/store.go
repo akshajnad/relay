@@ -81,6 +81,9 @@ type Job struct {
 	FinishedAt int64
 	LastError  string
 	Result     []byte
+	// TraceParent is the W3C traceparent of the submit, so later spans can
+	// join the job's trace.
+	TraceParent string
 }
 
 // Event is one entry of a job's transition history.
@@ -139,6 +142,7 @@ type SubmitParams struct {
 	Payload        []byte
 	IdempotencyKey string
 	MaxAttempts    int
+	TraceParent    string
 }
 
 // Acquired is the outcome of one Acquire call.

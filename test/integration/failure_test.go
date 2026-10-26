@@ -37,7 +37,7 @@ func waitLeased(t *testing.T, c *Cluster, id string) *relayv1.Job {
 
 func scrapeMetrics(t *testing.T, c *Cluster) metrics.Snapshot {
 	t.Helper()
-	resp, err := http.Get("http://" + c.MetricsAddr + "/metrics")
+	resp, err := http.Get("http://" + c.MetricsAddr + "/metrics.json")
 	if err != nil {
 		t.Fatal(err)
 	}

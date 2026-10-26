@@ -339,7 +339,7 @@ func (b *bench) waitDone(n int64, timeout time.Duration) (time.Time, error) {
 
 func (b *bench) scrape() (metrics.Snapshot, error) {
 	var s metrics.Snapshot
-	resp, err := b.http.Get("http://" + b.cfg.MetricsAddr + "/metrics")
+	resp, err := b.http.Get("http://" + b.cfg.MetricsAddr + "/metrics.json")
 	if err != nil {
 		return s, err
 	}

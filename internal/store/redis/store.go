@@ -96,7 +96,7 @@ func (s *Store) Submit(ctx context.Context, p store.SubmitParams) (id string, du
 		return "", false, err
 	}
 	res, err := scriptSubmit.Run(ctx, s.rdb, nil,
-		newID.String(), p.Type, p.Payload, p.IdempotencyKey, p.MaxAttempts).Slice()
+		newID.String(), p.Type, p.Payload, p.IdempotencyKey, p.MaxAttempts, p.TraceParent).Slice()
 	if err != nil {
 		return "", false, err
 	}
@@ -369,6 +369,7 @@ func jobFromMap(m map[string]string) (*store.Job, error) {
 		LeasedAt:       atoi64(m["leased_at"]),
 		FinishedAt:     atoi64(m["finished_at"]),
 		LastError:      m["last_error"],
+		TraceParent:    m["trace_parent"],
 	}
 	if r := m["result"]; r != "" {
 		j.Result = []byte(r)

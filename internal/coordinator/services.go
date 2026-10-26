@@ -8,6 +8,10 @@ import (
 
 	relayv1 "github.com/akshajnad/relay/gen/relay/v1"
 	"github.com/akshajnad/relay/internal/store"
+	"github.com/akshajnad/relay/internal/tracing"
+	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -28,6 +32,10 @@ func (s *jobService) SubmitJob(ctx context.Context, req *relayv1.SubmitJobReques
 	if req.GetMaxAttempts() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "max_attempts must be >= 0")
 	}
+	ctx, span := tracing.Tracer().Start(ctx, "relay.enqueue", trace.WithAttributes(
+		attribute.String("relay.job.type", req.GetType()),
+		attribute.String("relay.idempotency_key", req.GetIdempotencyKey())))
+	defer span.End()
 	sctx, cancel := c.storeCtx(ctx)
 	defer cancel()
 	id, dup, err := c.store.Submit(sctx, store.SubmitParams{
@@ -35,10 +43,14 @@ func (s *jobService) SubmitJob(ctx context.Context, req *relayv1.SubmitJobReques
 		Payload:        req.GetPayload(),
 		IdempotencyKey: req.GetIdempotencyKey(),
 		MaxAttempts:    int(req.GetMaxAttempts()),
+		// Later spans (dispatch, execute, complete) join this trace.
+		TraceParent: tracing.TraceParent(ctx),
 	})
 	if err != nil {
+		span.SetStatus(otelcodes.Error, err.Error())
 		return nil, storeError(err)
 	}
+	span.SetAttributes(attribute.String("relay.job.id", id), attribute.Bool("relay.duplicate", dup))
 	if dup {
 		c.metrics.Duplicates.Add(1)
 	} else {
@@ -153,10 +165,14 @@ func (s *workerService) AcquireJob(ctx context.Context, req *relayv1.AcquireJobR
 			handoff := time.Now()
 			sinceArrival := handoff.Sub(arrival)
 			sinceEligible := handoff.Sub(scriptCall) + time.Duration(res.StoreNowMs-res.EligibleAtMs)*time.Millisecond
-			c.metrics.SchedulingLatency.Record(min(sinceArrival, sinceEligible))
-			c.metrics.QueueWait.Record(time.Duration(res.StoreNowMs-j.EnqueuedAt) * time.Millisecond)
+			latency := min(sinceArrival, sinceEligible)
+			c.metrics.SchedulingLatency.Record(latency)
+			queueWait := time.Duration(res.StoreNowMs-j.EnqueuedAt) * time.Millisecond
+			c.metrics.QueueWait.Record(queueWait)
 			c.metrics.Leased.Add(1)
-			return &relayv1.AcquireJobResponse{HasJob: true, Job: jobToProto(j)}, nil
+			pj := jobToProto(j)
+			pj.TraceParent = dispatchSpan(ctx, j, scriptCall, handoff, latency, queueWait)
+			return &relayv1.AcquireJobResponse{HasJob: true, Job: pj}, nil
 		}
 
 		if res.NextEligibleIn > 0 {
@@ -173,6 +189,32 @@ func (s *workerService) AcquireJob(ctx context.Context, req *relayv1.AcquireJobR
 			return nil, status.FromContextError(ctx.Err()).Err()
 		}
 	}
+}
+
+// dispatchSpan records the assignment as a span in the job's own trace,
+// linked to the worker's AcquireJob call, and returns its traceparent so
+// the worker's execution span becomes its child.
+func dispatchSpan(rpcCtx context.Context, j *store.Job, start, end time.Time, latency, queueWait time.Duration) string {
+	if j.TraceParent == "" {
+		return ""
+	}
+	jobCtx := tracing.WithTraceParent(context.Background(), j.TraceParent)
+	ctx, span := tracing.Tracer().Start(jobCtx, "relay.dispatch",
+		trace.WithTimestamp(start),
+		trace.WithLinks(trace.LinkFromContext(rpcCtx)),
+		trace.WithAttributes(
+			attribute.String("relay.job.id", j.ID),
+			attribute.String("relay.worker.id", j.LeaseOwner),
+			attribute.Int64("relay.lease.token", j.LeaseToken),
+			attribute.Int("relay.attempt", j.Attempts),
+			attribute.Float64("relay.dispatch_latency_ms", float64(latency.Microseconds())/1000),
+			attribute.Float64("relay.queue_wait_ms", float64(queueWait.Microseconds())/1000),
+		))
+	span.End(trace.WithTimestamp(end))
+	if !span.SpanContext().IsValid() {
+		return j.TraceParent // tracing disabled: pass the submit's context through
+	}
+	return tracing.TraceParent(ctx)
 }
 
 func (c *Coordinator) release(ctx context.Context, j *store.Job) {

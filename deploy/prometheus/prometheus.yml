@@ -1,0 +1,19 @@
+# Scrapes every coordinator either cluster may run. Targets that do not
+# exist in the running cluster simply show as down.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: relay-coordinator
+    static_configs:
+      - targets: ["coordinator:9090"]
+        labels: {backend: redis, node: coordinator}
+      - targets: ["coord1:9090"]
+        labels: {backend: raft, node: n1}
+      - targets: ["coord2:9090"]
+        labels: {backend: raft, node: n2}
+      - targets: ["coord3:9090"]
+        labels: {backend: raft, node: n3}
+      - targets: ["coord4:9090"]
+        labels: {backend: raft, node: n4}

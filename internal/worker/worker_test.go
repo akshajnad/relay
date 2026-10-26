@@ -17,6 +17,7 @@ import (
 	"github.com/akshajnad/relay/internal/redistest"
 	"github.com/akshajnad/relay/internal/store"
 	redisstore "github.com/akshajnad/relay/internal/store/redis"
+	"github.com/akshajnad/relay/internal/tracing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -69,7 +70,7 @@ func startCluster(t *testing.T, mutCfg func(*coordinator.Config), mutStore func(
 	c := coordinator.New(st, cfg, m, testLogger(t).With("component", "coordinator"))
 
 	lis := bufconn.Listen(1 << 20)
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(tracing.ServerOption())
 	c.Register(srv)
 	go srv.Serve(lis)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -78,7 +79,7 @@ func startCluster(t *testing.T, mutCfg func(*coordinator.Config), mutStore func(
 
 	conn, err := grpc.NewClient("passthrough:///bufnet",
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+		grpc.WithTransportCredentials(insecure.NewCredentials()), tracing.DialOption())
 	if err != nil {
 		t.Fatal(err)
 	}

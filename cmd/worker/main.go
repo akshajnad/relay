@@ -17,6 +17,7 @@ import (
 	"github.com/akshajnad/relay/internal/history"
 	"github.com/akshajnad/relay/internal/logx"
 	"github.com/akshajnad/relay/internal/rpc"
+	"github.com/akshajnad/relay/internal/tracing"
 	"github.com/akshajnad/relay/internal/worker"
 	"google.golang.org/grpc"
 )
@@ -37,6 +38,7 @@ func run() error {
 	logLevel := fs.String("log-level", "info", "debug|info|warn|error")
 	logFormat := fs.String("log-format", "json", "json|text")
 	historyDir := fs.String("history-dir", "", "record every RPC to a JSONL history file in this directory (chaos testing)")
+	otlp := fs.String("otlp-endpoint", "", "OTLP gRPC endpoint (host:port) for traces; empty disables tracing")
 	fs.IntVar(&cfg.Concurrency, "concurrency", 1, "jobs to run in parallel")
 	fs.StringVar(&cfg.Hostname, "hostname", host, "hostname reported to the coordinator")
 	fs.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "how long to drain in-flight jobs on SIGTERM")
@@ -46,7 +48,16 @@ func run() error {
 	}
 	log := logx.New(os.Stderr, *logLevel, *logFormat)
 
-	var dialOpts []grpc.DialOption
+	shutdownTracing, err := tracing.Setup(context.Background(), "relay-worker", *otlp, 1)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = shutdownTracing(ctx)
+	}()
+	dialOpts := []grpc.DialOption{tracing.DialOption()}
 	if *historyDir != "" {
 		rec, err := history.Open(*historyDir, "worker")
 		if err != nil {
@@ -54,6 +65,14 @@ func run() error {
 		}
 		defer rec.Close()
 		dialOpts = append(dialOpts, grpc.WithChainUnaryInterceptor(history.UnaryClientInterceptor(rec)))
+		// Handler start and end, for benchmark timing.
+		cfg.OnExecute = func(job worker.Job, token int64, start bool) {
+			m := history.ExecEnd
+			if start {
+				m = history.ExecStart
+			}
+			rec.Note(history.Record{Method: m, JobID: job.ID, Worker: job.WorkerID, Token: token, Attempts: job.Attempt})
+		}
 		log.Info("recording history", "file", rec.Process())
 	}
 	conn, err := rpc.DialCluster(*addr, dialOpts...)
