@@ -13,8 +13,9 @@ import (
 // Dial returns a client connection to the coordinator. Reconnects back off
 // quickly (capped at 1s) so workers resume promptly after a coordinator
 // restart, and keepalives detect a dead connection without waiting for TCP.
-func Dial(addr string) (*grpc.ClientConn, error) {
-	return grpc.NewClient(addr,
+// extra options (e.g. a history interceptor) are applied after these.
+func Dial(addr string, extra ...grpc.DialOption) (*grpc.ClientConn, error) {
+	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithConnectParams(grpc.ConnectParams{
 			Backoff: backoff.Config{
@@ -30,5 +31,6 @@ func Dial(addr string) (*grpc.ClientConn, error) {
 			Timeout:             5 * time.Second,
 			PermitWithoutStream: true,
 		}),
-	)
+	}
+	return grpc.NewClient(addr, append(opts, extra...)...)
 }
