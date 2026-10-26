@@ -13,16 +13,18 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/akshajnad/relay/internal/buildrev"
 	"github.com/akshajnad/relay/internal/metrics"
 )
 
 type Report struct {
-	Timestamp time.Time  `json:"timestamp"`
-	Config    Config     `json:"config"`
-	Host      HostInfo   `json:"host"`
-	Docker    DockerInfo `json:"docker"`
-	Runs      []Run      `json:"runs"`
-	Target    Target     `json:"target"`
+	Timestamp time.Time      `json:"timestamp"`
+	Config    Config         `json:"config"`
+	Host      HostInfo       `json:"host"`
+	Docker    DockerInfo     `json:"docker"`
+	Image     buildrev.Image `json:"image"`
+	Runs      []Run          `json:"runs"`
+	Target    Target         `json:"target"`
 }
 
 type Target struct {

@@ -232,6 +232,122 @@ func TestRaftLeaderKilled(t *testing.T) {
 	})
 }
 
+// A follower rejects calls with NOT_LEADER naming the leader, without
+// executing them, and a cluster client that starts at the follower follows
+// the hint to the leader.
+func TestRaftFollowerRedirects(t *testing.T) {
+	c := NewRaftCluster(t, 1)
+	leader := c.leader("")
+	var follower string
+	for _, n := range []string{"n1", "n2", "n3"} {
+		if n != leader {
+			follower = n
+			break
+		}
+	}
+
+	direct, err := rpc.Dial(c.Endpoints[follower])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer direct.Close()
+	_, err = relayv1.NewJobServiceClient(direct).SubmitJob(ctx(t), &relayv1.SubmitJobRequest{Type: "noop", IdempotencyKey: "redirect-direct"})
+	id, _, ok := rpc.ParseNotLeader(err)
+	if !ok || id != leader {
+		t.Fatalf("submit to follower %s: got err %v (leader id %q), want NOT_LEADER naming %s", follower, err, id, leader)
+	}
+
+	// Follower first in the endpoint list: the client must follow the hint.
+	spec := []string{follower + "=" + c.Endpoints[follower]}
+	for _, n := range []string{"n1", "n2", "n3"} {
+		if n != follower {
+			spec = append(spec, n+"="+c.Endpoints[n])
+		}
+	}
+	conn, err := rpc.DialCluster(strings.Join(spec, ","))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	jobs := relayv1.NewJobServiceClient(conn)
+	resp, err := jobs.SubmitJob(ctx(t), &relayv1.SubmitJobRequest{Type: "noop", IdempotencyKey: "redirect-cluster"})
+	if err != nil {
+		t.Fatalf("submit through follower-first cluster client: %v", err)
+	}
+	Eventually(t, 30*time.Second, "redirected job to succeed", func() bool {
+		got, err := jobs.GetJob(ctx(t), &relayv1.GetJobRequest{JobId: resp.JobId})
+		return err == nil && got.Job.Status == succeeded
+	})
+	// The direct submit was rejected before it executed: its key is unused.
+	if _, err := c.Jobs.SubmitJob(ctx(t), &relayv1.SubmitJobRequest{Type: "noop", IdempotencyKey: "redirect-direct"}); err != nil {
+		t.Fatal(err)
+	}
+	if dup, err := c.Jobs.SubmitJob(ctx(t), &relayv1.SubmitJobRequest{Type: "noop", IdempotencyKey: "redirect-direct"}); err != nil || !dup.Duplicate {
+		t.Fatalf("resubmit of redirect-direct: dup=%v err=%v", dup.GetDuplicate(), err)
+	}
+}
+
+// With both followers paused, the leader is a minority of one that clients
+// can still reach. It must step down, acknowledge no write, and the
+// cluster must recover once the followers return.
+func TestRaftMinorityLeaderStepsDown(t *testing.T) {
+	c := NewRaftCluster(t, 1)
+	leader := c.leader("")
+	var paused []string
+	for _, n := range []string{"n1", "n2", "n3"} {
+		if n != leader {
+			id := c.container(n)
+			docker(t, "pause", id)
+			paused = append(paused, id)
+		}
+	}
+	unpause := func() {
+		for _, id := range paused {
+			exec.Command("docker", "unpause", id).Run()
+		}
+		paused = nil
+	}
+	t.Cleanup(unpause)
+
+	direct, err := rpc.Dial(c.Endpoints[leader])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer direct.Close()
+	jobs := relayv1.NewJobServiceClient(direct)
+	cluster := relayv1.NewClusterServiceClient(direct)
+
+	cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_, err = jobs.SubmitJob(cctx, &relayv1.SubmitJobRequest{Type: "noop", IdempotencyKey: "minority"})
+	cancel()
+	if err == nil {
+		t.Fatal("isolated leader acknowledged a write without a quorum")
+	}
+	t.Logf("submit to isolated leader %s failed as expected: %v", leader, err)
+	Eventually(t, 15*time.Second, leader+" to step down", func() bool {
+		st, err := cluster.ClusterStatus(ctx(t), &relayv1.ClusterStatusRequest{})
+		return err == nil && st.State != "Leader"
+	})
+	cctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	_, err = jobs.SubmitJob(cctx, &relayv1.SubmitJobRequest{Type: "noop", IdempotencyKey: "minority-after"})
+	cancel()
+	if _, _, ok := rpc.ParseNotLeader(err); !ok {
+		t.Fatalf("submit after step-down: got %v, want NOT_LEADER", err)
+	}
+
+	unpause()
+	c.leader("")
+	// The write was never acknowledged, so its outcome is unknown; a retry
+	// under the same key must yield exactly one job, which completes.
+	id := c.submitRetrying(&relayv1.SubmitJobRequest{Type: "noop", IdempotencyKey: "minority"})
+	if again := c.submitRetrying(&relayv1.SubmitJobRequest{Type: "noop", IdempotencyKey: "minority"}); again != id {
+		t.Fatalf("key minority maps to %s and %s", id, again)
+	}
+	Eventually(t, 60*time.Second, "job "+id+" to succeed", func() bool {
+		return c.getRetrying(id).Job.Status == succeeded
+	})
+}
+
 // Membership is managed through relayctl: a fourth node joins and catches
 // up, then is removed.
 func TestRaftMembershipViaRelayctl(t *testing.T) {

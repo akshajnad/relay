@@ -34,6 +34,7 @@ import (
 	"time"
 
 	relayv1 "github.com/akshajnad/relay/gen/relay/v1"
+	"github.com/akshajnad/relay/internal/buildrev"
 	"github.com/akshajnad/relay/internal/envflag"
 	"github.com/akshajnad/relay/internal/metrics"
 	"github.com/akshajnad/relay/internal/rpc"
@@ -155,6 +156,7 @@ func run() error {
 		Config:    cfg,
 		Host:      hostInfo(),
 		Docker:    dockerInfo(),
+		Image:     buildrev.Inspect("relay:dev"),
 		Target:    Target{Description: "p95 scheduling latency < 25ms with 100 worker slots and 5,000 queued jobs", P95Ms: 25},
 	}
 	for _, mode := range cfg.Modes {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	relayv1 "github.com/akshajnad/relay/gen/relay/v1"
+	"github.com/akshajnad/relay/internal/buildrev"
 	"github.com/akshajnad/relay/internal/check"
 	"github.com/akshajnad/relay/internal/history"
 	"github.com/akshajnad/relay/internal/rpc"
@@ -29,6 +30,7 @@ type runConfig struct {
 	Workers        int
 	Concurrency    int
 	Image          string
+	ImageBuild     buildrev.Image
 	OutRoot        string
 	ComposeFile    string
 	Keep           bool
@@ -114,10 +116,11 @@ func runMain(args []string) error {
 	}
 	_ = os.Chmod(histDir, 0o777) // containers write here
 	writeJSON(filepath.Join(dir, "schedule.json"), sched)
+	cfg.ImageBuild = buildrev.Inspect(cfg.Image)
 	writeJSON(filepath.Join(dir, "config.json"), cfg)
 
-	fmt.Printf("relay-chaos: backend=%s seed=%d duration=%s workers=%dx%d image=%s\n",
-		cfg.Backend, cfg.Seed, cfg.Duration, cfg.Workers, cfg.Concurrency, cfg.Image)
+	fmt.Printf("relay-chaos: backend=%s seed=%d duration=%s workers=%dx%d image=%s (revision %s)\n",
+		cfg.Backend, cfg.Seed, cfg.Duration, cfg.Workers, cfg.Concurrency, cfg.Image, cfg.ImageBuild.Revision)
 	fmt.Printf("artifacts: %s\n\nfault schedule (%d faults):\n", dir, len(sched))
 	for _, f := range sched {
 		fmt.Println("  " + f.String())

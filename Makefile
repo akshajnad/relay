@@ -11,6 +11,11 @@ COMPOSE_FILE_raft := deploy/docker-compose.raft.yml
 SEED ?= 1
 DURATION ?= 5m
 SEEDS ?= 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+# Stamped into the image (OCI revision label) and recorded in every results
+# file, so a number can be traced to the code that produced it.
+export RELAY_GIT_REVISION := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
+SWEEP_TAG = relay:sweep-$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+SWEEP_OUT = chaos-out/sweep-$(BACKEND)-$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 .PHONY: all generate build test integration bench bench-relay image lint clean chaos chaos-sweep up down
 
@@ -53,11 +58,17 @@ integration: image
 chaos: image
 	go run ./cmd/relay-chaos run --backend $(BACKEND) --seed $(SEED) --duration $(DURATION)
 
-## chaos-sweep: a chaos run per seed in SEEDS; stops at the first failure
+## chaos-sweep: a chaos run per seed in SEEDS against a pinned image tag (so a
+##              rebuild mid-sweep cannot change the binary under test), then
+##              bench/results/chaos-sweep-$(BACKEND).json; fails if any seed fails
 chaos-sweep: image
-	@for s in $(SEEDS); do \
-		go run ./cmd/relay-chaos run --backend $(BACKEND) --seed $$s --duration $(DURATION) || exit 1; \
-	done
+	docker tag relay:dev $(SWEEP_TAG)
+	@failed=0; for s in $(SEEDS); do \
+		go run ./cmd/relay-chaos run --backend $(BACKEND) --seed $$s --duration $(DURATION) \
+			--image $(SWEEP_TAG) --out $(SWEEP_OUT) || failed=1; \
+	done; \
+	go run ./cmd/relay-chaos summarize --out bench/results/chaos-sweep-$(BACKEND).json $(SWEEP_OUT)/$(BACKEND)-seed*; \
+	exit $$failed
 
 ## bench: comparative benchmark, Relay-Redis vs Relay-Raft vs asynq (~1.5h;
 ##        BENCH_ARGS="--trials 5 --sat-jobs 5000" for a quick look)

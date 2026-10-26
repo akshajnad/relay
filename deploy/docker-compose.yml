@@ -12,6 +12,8 @@ x-relay-image: &relay-image
   build:
     context: ..
     dockerfile: deploy/Dockerfile
+    args:
+      GIT_REVISION: ${RELAY_GIT_REVISION:-unknown}
 
 services:
   redis:
