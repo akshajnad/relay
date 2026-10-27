@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relay live</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='4' cy='8' r='3' fill='%232a78d6'/%3E%3Ccircle cx='12' cy='8' r='3' fill='%231baf7a'/%3E%3Cpath d='M7 8h2' stroke='%2352514e' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <div>
+      <h1>Relay</h1>
+      <p class="sub">live view of the task engine</p>
+    </div>
+  </div>
+  <div class="chips" id="chips"></div>
+</header>
+
+<div class="layout">
+<main>
+  <section class="kpis" id="kpis" aria-label="Key numbers"></section>
+
+  <div class="row two">
+    <section class="panel" id="topology-panel">
+      <div class="panel-head">
+        <h2>Cluster</h2>
+        <p class="hint" id="topology-hint">Coordinators, and every worker's slots and heartbeat.</p>
+      </div>
+      <div id="empty" class="empty" hidden>
+        <p><b>No cluster is being watched.</b></p>
+        <p id="empty-text">Launch one with your own settings, or start one with <code>make up</code> and the dashboard will attach.</p>
+        <button class="btn primary" data-goto="cluster">Configure &amp; launch</button>
+      </div>
+      <div id="coords" class="coords"></div>
+      <div class="subhead"><h3>Workers</h3><span class="hint" id="workers-hint"></span></div>
+      <div id="workers" class="workers"></div>
+    </section>
+
+    <section class="panel" id="flow-panel">
+      <div class="panel-head">
+        <h2>Job lifecycle</h2>
+        <p class="hint">Every transition a job can make. Boxes show jobs in each state now (terminal: since the dashboard started watching); arrows show transitions per second.</p>
+      </div>
+      <svg id="flow" viewBox="0 0 560 300" role="img" aria-label="Job state machine with live transition rates"></svg>
+    </section>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head row-head">
+      <div>
+        <h2>Lease timeline</h2>
+        <p class="hint">Each bar is one lease: a job held by a worker under a fencing token, ending in how it was let go. Shows the jobs this dashboard submitted (<span id="tl-sampled"></span>).</p>
+      </div>
+      <div class="seg" id="tl-window" role="group" aria-label="Time window">
+        <button data-w="15">15s</button><button data-w="30" class="on">30s</button><button data-w="60">60s</button>
+      </div>
+    </div>
+    <div class="legend" id="tl-legend"></div>
+    <div class="timeline-wrap"><canvas id="timeline"></canvas></div>
+  </section>
+
+  <div class="row charts">
+    <section class="panel chart" data-chart="throughput">
+      <div class="panel-head"><h2>Throughput</h2><p class="hint">transitions per second, cluster-wide</p></div>
+      <div class="legend"></div><canvas></canvas>
+    </section>
+    <section class="panel chart" data-chart="queue">
+      <div class="panel-head"><h2>Queue</h2><p class="hint">jobs waiting vs. jobs held by workers</p></div>
+      <div class="legend"></div><canvas></canvas>
+    </section>
+    <section class="panel chart" data-chart="dispatch">
+      <div class="panel-head"><h2>Dispatch latency</h2><p class="hint">hand-off minus max(job eligible, worker asked) · last 10s · ms, log scale</p></div>
+      <div class="legend"></div><canvas></canvas>
+    </section>
+    <section class="panel chart" data-chart="store">
+      <div class="panel-head"><h2 id="store-title">Store latency</h2><p class="hint" id="store-hint"></p></div>
+      <div class="legend"></div><canvas></canvas>
+    </section>
+  </div>
+
+  <div class="row two">
+    <section class="panel">
+      <div class="panel-head"><h2>What just happened</h2><p class="hint">Changes the dashboard noticed, in plain words. Marked items also appear as lines on the charts.</p></div>
+      <ol id="feed" class="feed"></ol>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><h2>Recent jobs</h2><p class="hint">Jobs this dashboard submitted. Click one for its full history.</p></div>
+      <div class="table-wrap">
+        <table class="jobs">
+          <thead><tr><th>Job</th><th>Type</th><th>Status</th><th class="num" title="attempts / max attempts">Tries</th><th>Worker</th><th class="num">Token</th><th class="num">Age</th></tr></thead>
+          <tbody id="jobs"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</main>
+
+<aside class="control" aria-label="Controls">
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="workload" class="on">Workload</button>
+    <button role="tab" data-tab="scenarios">Scenarios</button>
+    <button role="tab" data-tab="cluster">Cluster</button>
+  </nav>
+
+  <div class="tab" data-pane="workload">
+    <section class="ctl">
+      <h3>Load generator</h3>
+      <div class="presets" id="load-presets"></div>
+      <form id="load-form" autocomplete="off">
+        <label class="full">Rate <span class="unit">jobs/s</span>
+          <div class="range-row"><input type="range" min="1" max="2000" step="1" name="rate_range"><input type="number" name="rate" min="1" max="5000" step="1"></div>
+        </label>
+        <fieldset class="full mix"><legend>Job mix <span class="unit">relative weights</span></legend>
+          <label>noop<input type="number" name="mix_noop" min="0" step="1"></label>
+          <label>sleep<input type="number" name="mix_sleep" min="0" step="1"></label>
+          <label>fail-n-times<input type="number" name="mix_fail" min="0" step="1"></label>
+        </fieldset>
+        <label>Sleep min <span class="unit">ms</span><input type="number" name="sleep_min_ms" min="0"></label>
+        <label>Sleep max <span class="unit">ms</span><input type="number" name="sleep_max_ms" min="0"></label>
+        <label>fail-n-times n<input type="number" name="fail_n" min="0" max="100"></label>
+        <label>Max attempts<input type="number" name="max_attempts" min="0" max="100" title="0 = server default"></label>
+        <label class="full">Duplicate submits <span class="unit">% reusing a recent idempotency key</span><input type="number" name="dup_pct" min="0" max="100"></label>
+        <div class="full buttons">
+          <button type="submit" class="btn primary" id="load-start">Start load</button>
+          <button type="button" class="btn" id="load-stop">Stop</button>
+        </div>
+      </form>
+      <p class="stat" id="load-stat"></p>
+    </section>
+
+    <section class="ctl">
+      <h3>Submit jobs by hand</h3>
+      <form id="submit-form" autocomplete="off">
+        <label>Type
+          <select name="type"><option>sleep</option><option>noop</option><option>fail-n-times</option></select>
+        </label>
+        <label>Count<input type="number" name="count" value="1" min="1" max="500"></label>
+        <label class="full">Payload <span class="unit">JSON</span><input type="text" name="payload" value='{"duration_ms":2000}' spellcheck="false"></label>
+        <label>Max attempts<input type="number" name="max_attempts" value="0" min="0" max="100" title="0 = server default"></label>
+        <label>Idempotency key<input type="text" name="idempotency_key" placeholder="optional" spellcheck="false"></label>
+        <div class="full buttons"><button type="submit" class="btn primary">Submit</button></div>
+      </form>
+      <p class="stat" id="submit-stat"></p>
+    </section>
+  </div>
+
+  <div class="tab" data-pane="scenarios" hidden>
+    <section class="ctl">
+      <p class="hint">Each scenario applies a fault to a busy cluster and narrates what the engine does about it. Faults heal when the scenario ends or is stopped. Every worker and coordinator card also has its own fault buttons.</p>
+      <div id="scenario-run" class="scenario-run" hidden>
+        <div class="run-head"><b id="scenario-title"></b><button class="btn small" id="scenario-stop">Stop</button></div>
+        <ol id="scenario-lines" class="narrative"></ol>
+      </div>
+      <div id="scenarios"></div>
+    </section>
+  </div>
+
+  <div class="tab" data-pane="cluster" hidden>
+    <section class="ctl">
+      <h3>Watching</h3>
+      <p class="stat" id="cluster-stat"></p>
+      <div class="scale-row" id="scale-row">
+        <label>Workers<input type="number" id="scale-n" min="0" max="32"></label>
+        <button class="btn" id="scale-apply">Scale now</button>
+        <button class="btn danger" id="cluster-stop">Stop cluster</button>
+      </div>
+      <div class="confirm" id="stop-confirm" hidden>
+        <span>Stop every container and delete the cluster's volumes?</span>
+        <button class="btn danger small" id="stop-yes">Stop it</button><button class="btn small" data-cancel>Cancel</button>
+      </div>
+    </section>
+
+    <section class="ctl">
+      <h3>Launch a cluster</h3>
+      <div class="presets" id="cluster-presets"></div>
+      <form id="cluster-form" autocomplete="off">
+        <fieldset class="full radios"><legend>Backend</legend>
+          <label><input type="radio" name="backend" value="raft"> Raft <span class="unit">3 coordinators, no Redis</span></label>
+          <label><input type="radio" name="backend" value="redis"> Redis <span class="unit">1 coordinator + Redis</span></label>
+        </fieldset>
+        <label>Workers<input type="number" name="workers" min="0" max="32"></label>
+        <label>Slots per worker<input type="number" name="concurrency" min="1" max="64"></label>
+        <label>Heartbeat interval<input type="text" name="heartbeat_interval"></label>
+        <label>Missed heartbeats<input type="number" name="missed_heartbeats" min="1" max="100"></label>
+        <p class="full derived" id="dead-after"></p>
+        <label>Lease duration<input type="text" name="lease_duration"></label>
+        <label>Long-poll timeout<input type="text" name="poll_timeout"></label>
+        <label>Retry backoff base<input type="text" name="backoff_base"></label>
+        <label>Default sleep<input type="text" name="sleep_duration" title="the sleep handler's duration when a payload gives none"></label>
+        <fieldset class="full raft-only"><legend>Raft timeouts</legend>
+          <label>Heartbeat<input type="text" name="raft_heartbeat_timeout"></label>
+          <label>Election<input type="text" name="raft_election_timeout"></label>
+          <label>Leader lease<input type="text" name="raft_leader_lease_timeout"></label>
+        </fieldset>
+        <label class="full check"><input type="checkbox" name="observability"> Also start Jaeger, Prometheus and Grafana</label>
+        <label class="full check"><input type="checkbox" name="rebuild"> Rebuild the <code>relay:dev</code> image first</label>
+        <p class="full error" id="cluster-error" hidden></p>
+        <div class="full buttons"><button type="submit" class="btn primary">Launch</button></div>
+        <div class="full confirm" id="launch-confirm" hidden>
+          <span>This replaces any running Relay compose cluster and deletes its data.</span>
+          <button class="btn primary small" id="launch-yes" type="button">Launch</button><button class="btn small" type="button" data-cancel>Cancel</button>
+        </div>
+      </form>
+      <pre class="oplog" id="oplog" hidden></pre>
+    </section>
+  </div>
+</aside>
+</div>
+
+<div class="modal" id="job-modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="job-title">
+    <button class="close" aria-label="Close">×</button>
+    <div id="job-body"></div>
+  </div>
+</div>
+<div class="tip" id="tip" hidden></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>

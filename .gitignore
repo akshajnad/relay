@@ -9,4 +9,5 @@ bench/results/compare-*/*/
 /relayctl
 /relay-chaos
 /relay-bench
+/relay-dash
 /asynq-worker
