@@ -102,7 +102,7 @@ make test                   # unit tests, Store conformance on both backends (-r
 make integration            # container failure tests, Raft failover, redirect, minority leader, membership, chaos self-tests
 make chaos SEED=1           # 5-minute seeded chaos run on Raft (BACKEND=redis for Redis)
 make chaos-sweep            # 20 seeds x 5 min on a pinned image, summarized into bench/results/chaos-sweep-$BACKEND.json (~2h)
-make bench                  # Relay-Redis vs Relay-Raft vs asynq (~1.5h; see BENCH_ARGS in the Makefile)
+make bench                  # Relay-Redis vs Relay-Raft vs asynq (~2.5h; see BENCH_ARGS in the Makefile)
 ```
 
 `make up BACKEND=redis` runs the Redis backend instead. Every flag can
@@ -169,8 +169,9 @@ and recorded in [DESIGN §12](DESIGN.md#12-decision-log):
 ## Benchmarks
 
 All numbers are from one run of `make bench`
-([`bench/results/compare-20261026T085821Z.json`](bench/results/compare-20261026T085821Z.json),
-charts alongside). The setup:
+([`bench/results/compare-20261027T033746Z.json`](bench/results/compare-20261027T033746Z.json),
+charts alongside), on image `relay:dev` built at commit `547dd3a`. The
+results file records the image's revision. The setup:
 - **Hardware:** Apple M4 Pro (14 cores, 24 GB), macOS 26.6.2, go1.26.1.
 - **Container runtime:** Docker Desktop 29.9.2, with
   14 CPUs and 7.7 GB for its VM.
@@ -178,19 +179,23 @@ charts alongside). The setup:
   driver) runs on that one machine, so there are no real network hops.
 - **Configuration:** each backend's failure-detection settings are
   recorded in the results file.
+- **One disturbance:** the host slept for about a minute during
+  asynq-tuned's recovery phase (`pmset` log, 05:48–05:49 UTC). That hit
+  trial 21, which reads 150.43s, the phase's max; its other 29 trials
+  ran 87–127s. Every other phase ran with the host awake.
 
 | backend | throughput at saturation | dispatch latency p50 / p95 / p99 (ms) | end-to-end queue wait p50 / p95 / p99 (ms) | submit RTT p50 / p95 / p99 (ms) | worker-failure recovery p50 / p90 / max | leader failover p50 / p90 / max |
 |---|---|---|---|---|---|---|
-| **relay-redis** | 12,439 | 0.52 / 0.74 / 0.96 | 0.52 / 0.74 / 0.96 | 0.34 / 0.52 / 0.72 | 2.83s / 3.77s / 3.81s (n=30) | — |
-| **relay-raft** | 4,474 | 4.84 / 8.45 / 12.41 | 4.84 / 8.45 / 12.41 | 3.06 / 5.67 / 8.44 | 3.70s / 3.78s / 3.81s (n=30) | 2.50s / 2.85s / 3.55s (n=30) |
-| **asynq** | 12,889 | 1.02 / 143.32 / 277.02 | 75.43 / 273.59 / 350.91 | 0.20 / 0.43 / 0.73 | 108.02s / 131.59s / 149.36s (n=30) | — |
-| **asynq-tuned** | 12,540 | 1.01 / 3.10 / 4.42 | 1.01 / 3.10 / 4.42 | 0.16 / 0.32 / 0.49 | — | — |
+| **relay-redis** | 16,388 | 0.34 / 0.48 / 0.66 | 0.34 / 0.48 / 0.66 | 0.22 / 0.34 / 0.48 | 2.83s / 3.75s / 3.81s (n=30) | — |
+| **relay-raft** | 4,511 | 3.12 / 7.43 / 13.76 | 3.12 / 7.43 / 13.76 | 1.78 / 4.84 / 9.28 | 2.85s / 3.79s / 3.82s (n=30) | 2.29s / 2.69s / 3.21s (n=30) |
+| **asynq** | 16,781 | 0.90 / 156.91 / 294.75 | 77.52 / 279.71 / 369.34 | 0.19 / 0.34 / 0.94 | 111.02s / 126.26s / 154.47s (n=30) | — |
+| **asynq-tuned** | 16,793 | 0.95 / 2.97 / 4.24 | 0.95 / 2.97 / 4.24 | 0.10 / 0.20 / 0.30 | 111.80s / 126.77s / 150.43s (n=30) | — |
 
-![throughput](bench/results/compare-20261026T085821Z/throughput.png)
-![dispatch latency](bench/results/compare-20261026T085821Z/dispatch_latency.png)
-![queue wait](bench/results/compare-20261026T085821Z/queue_wait.png)
-![worker recovery](bench/results/compare-20261026T085821Z/worker_recovery.png)
-![leader failover](bench/results/compare-20261026T085821Z/leader_failover.png)
+![throughput](bench/results/compare-20261027T033746Z/throughput.png)
+![dispatch latency](bench/results/compare-20261027T033746Z/dispatch_latency.png)
+![queue wait](bench/results/compare-20261027T033746Z/queue_wait.png)
+![worker recovery](bench/results/compare-20261027T033746Z/worker_recovery.png)
+![leader failover](bench/results/compare-20261027T033746Z/leader_failover.png)
 
 **Correctness under faults.** Each backend ran the same 2-minute
 workload: 20 sleep jobs/s on 4 workers × 4 slots, while seeded faults
@@ -199,9 +204,10 @@ test then waited for every acknowledged job to finish.
 
 | backend | faults | acked jobs | lost | unfinished | duplicate executions | duplicate terminal transitions |
 |---|---|---|---|---|---|---|
-| relay-redis | 18 | 2,460 | 0 | 0 | 45 | 0 |
-| relay-raft | 18 | 2,464 | 0 | 0 | 45 | 0 |
-| asynq | 18 | 2,460 | 0 | 0 | 8 | not observable |
+| relay-redis | 18 | 2,456 | 0 | 0 | 47 | 0 |
+| relay-raft | 18 | 2,456 | 0 | 0 | 48 | 0 |
+| asynq | 18 | 2,456 | 0 | 0 | 8 | not observable |
+| asynq-tuned | 18 | 2,456 | 0 | 0 | 11 | not observable |
 
 ### Workloads and definitions
 
@@ -246,10 +252,10 @@ test then waited for every acknowledged job to finish.
 - **Throughput: asynq wins, narrowly against Relay-Redis and clearly
   against Relay-Raft.** asynq dequeues straight from Redis inside its
   worker process. Relay adds a gRPC hop through the coordinator per
-  acquire and per report, and still lands within 4%
-  (12,439 vs 12,889 jobs/s).
-  **Relay-Raft is about 3× slower**
-  (4,474 jobs/s). Every
+  acquire and per report, and still lands within 3%
+  (16,388 vs 16,781 jobs/s; asynq-tuned 16,793).
+  **Relay-Raft is about 3.6× slower**
+  (4,511 jobs/s). Every
   acquire and every completion is a Raft log entry, replicated to a
   majority and fsynced by bbolt before it is applied. That is the price
   of having no single point of failure, and it is the main
@@ -260,29 +266,30 @@ test then waited for every acknowledged job to finish.
   sleeps for `TaskCheckInterval` (1s by default) between dequeue
   attempts, so jobs pile up during a sleep and then drain in a burst.
   Jobs that waited through a sleep, while slots sat idle, show up in the
-  p95/p99 (143 / 277 ms). Jobs drained in the burst waited only for
+  p95/p99 (157 / 295 ms). Jobs drained in the burst waited only for
   slots, which the definition excludes, which is why the p50 is 1 ms. The
-  end-to-end queue wait (p50 75 ms) shows the full cost. With a 10 ms
-  interval, asynq-tuned is close to Relay-Redis: 1.01 vs 0.52 ms p50,
-  and 4.4 vs 0.96 ms p99. Relay's long-poll plus FIFO notifier hands a
-  job to an already-waiting worker without polling. Relay-Raft's ~5 ms
-  p50 is the log commit on submit and on acquire (see submit RTT: 3 ms).
-- **Recovery from a dead worker: Relay is about 30–40× faster.** Relay
+  end-to-end queue wait (p50 78 ms) shows the full cost. With a 10 ms
+  interval, asynq-tuned is close to Relay-Redis: 0.95 vs 0.34 ms p50,
+  and 4.2 vs 0.66 ms p99. Relay's long-poll plus FIFO notifier hands a
+  job to an already-waiting worker without polling. Relay-Raft's ~3 ms
+  p50 is the log commit on submit and on acquire (see submit RTT: ~2 ms).
+- **Recovery from a dead worker: Relay is about 40× faster.** Relay
   declares a worker dead after 3 missed 1s heartbeats and requeues its
   jobs in the same atomic step. That takes 2.8–3.8s; the two modes come
   from the detector's 1s tick. asynq waits for its fixed 30s lease to
   expire, then *another* 30s (its clock-skew allowance), then for its
   recoverer, which runs every 60s. The reclaimed task then waits a
   sidekiq-style retry delay of 15–44s. That gives the measured
-  81–149s.
-- **Leader failover (Relay-Raft): 2.5s median, 3.6s worst.** That is
+  87–154s. `TaskCheckInterval` does not touch that path, so asynq-tuned
+  recovers no faster than asynq's defaults (p50 111.8s vs 111.0s).
+- **Leader failover (Relay-Raft): 2.3s median, 3.2s worst.** That is
   Raft's 1s heartbeat timeout plus a randomized election, the new
   leader's `Barrier`, and clients following `NOT_LEADER` to it. Raft's
   timeouts can be lowered at the cost of spurious elections on a loaded
   host.
 - **Faults: no backend lost a job, and Relay records zero duplicate
   terminal transitions.**
-  - Relay re-ran more jobs (45 vs 8). Detecting failure in 3s means a
+  - Relay re-ran more jobs (47–48 vs 8–11). Detecting failure in 3s means a
     worker paused or partitioned for 2–10s gets its jobs reassigned while
     it is still running them. That trade, faster recovery for more
     duplicate executions, is inherent to at-least-once execution, and
@@ -297,7 +304,7 @@ test then waited for every acknowledged job to finish.
 **A note on Relay's internal metric.** The coordinator's own dispatch
 latency, the project's original metric
 ([details](#relays-coordinator-measured-latency)), reports Relay-Redis at
-p50 0.15 / p95 1.16 / p99 1.23 ms.
+p50 0.09 / p95 1.09 / p99 1.13 ms.
 That is lower at the median than the external number, because it starts
 when the job is eligible inside Redis rather than at submit, but *higher*
 at p95. Its `redis_now − eligible_at` term uses Redis `TIME` truncated to
@@ -306,7 +313,7 @@ queue wait shows the quantization directly: p50 0.00 ms,
 p95 1.00 ms. The definition is unchanged; this is a
 resolution limit, documented in
 [DESIGN §11](DESIGN.md#11-known-limitations). On Raft the internal metric
-is p50 4.11 / p99 11.24 ms.
+is p50 2.75 / p99 12.41 ms.
 
 ### Relay's coordinator-measured latency
 
