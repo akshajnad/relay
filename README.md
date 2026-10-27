@@ -26,6 +26,7 @@ decision log.
 - [Correctness](#correctness)
 - [Benchmarks](#benchmarks)
 - [Observability](#observability)
+- [Live dashboard](#live-dashboard)
 - [Repository map](#repository-map)
 
 ## 30-second tour
@@ -84,6 +85,7 @@ flowchart LR
 | `relayctl` | `submit [--wait]`, `get`, `workers`, `health`, `cluster status\|add\|remove` |
 | `relay-chaos` | seeded chaos runs plus the history checker |
 | `relay-bench` | comparative benchmarks (`compare`) and charts (`plot`) |
+| `relay-dash` | live web dashboard: watch the cluster, generate load, inject faults, launch with custom settings |
 | `asynq-worker` | the asynq baseline, with the same handlers and the same timing hooks |
 
 ## Quickstart
@@ -96,6 +98,7 @@ make up                     # 3 Raft coordinators + 3 workers + Jaeger, Promethe
 go run ./cmd/relayctl --coordinator n1=localhost:50051,n2=localhost:50052,n3=localhost:50053 cluster status
 go run ./cmd/relayctl --coordinator localhost:50051 submit --type fail-n-times --payload '{"n":1}' --max-attempts 3 --wait
 open http://localhost:3000  # Grafana "Relay" dashboard; traces at http://localhost:16686
+make dash                   # live dashboard at http://127.0.0.1:8080 (see below)
 make down
 
 make test                   # unit tests, Store conformance on both backends (-race)
@@ -346,6 +349,50 @@ noted above. A two-mode run a minute earlier measured steady p95 at
 - **Grafana.** The "Relay" dashboard in `deploy/grafana` is provisioned
   automatically by `make up`.
 
+## Live dashboard
+
+`make dash` (or `go run ./cmd/relay-dash`, from the repository root)
+serves a dashboard at http://127.0.0.1:8080. It attaches to whichever
+compose cluster is running, or launches one from its Cluster tab with
+settings you choose: backend, worker count and slots, lease duration,
+heartbeat interval and missed-heartbeat budget, long-poll timeout, retry
+backoff, and the Raft timeouts. The form rejects combinations the
+coordinator would refuse, such as a lease shorter than the
+failure-detection window.
+
+It shows:
+- **Cluster.** Each coordinator's Raft role, term and commit index.
+  Each worker's slots, and a heartbeat bar that fills toward the failure
+  detector's deadline. Each worker's earlier ids from before it was
+  declared dead.
+- **Job lifecycle.** The state machine, with jobs in each state and
+  transitions per second on every edge, including reports fenced out
+  for carrying a stale token.
+- **Lease timeline.** One bar per lease, on a lane per worker, colored
+  by how it ended (succeeded, retry, requeued, ...) and labeled with its
+  fencing token.
+- **Charts.** Throughput, queue depth, and dispatch and Raft commit
+  latency. The latencies are windowed percentiles computed from the
+  coordinators' Prometheus histograms.
+- **What just happened.** A plain-language feed of leader changes,
+  workers declared dead, requeues and fenced reports.
+
+Its Workload tab runs a load generator (rate, job mix, sleep range,
+fail-n-times, duplicate idempotency keys) and submits single jobs. Every
+worker and coordinator card has kill, pause and isolate buttons. The
+Scenarios tab runs guided failures and narrates the engine's response:
+- a zombie worker meeting a fencing token
+- a worker crash
+- a leader failover
+- a leader partition
+- a Redis stall
+- retries ending in dead letters
+
+The dashboard uses only the public gRPC API, `/metrics` and the docker
+CLI. It follows the jobs it submitted with `GetJob`, sampled at 40 new
+jobs per second so its polling stays light. It binds to loopback and
+refuses cross-origin requests, because it can stop containers.
+
 ## Repository map
 
 | Path | |
@@ -356,5 +403,6 @@ noted above. A two-mode run a minute earlier measured steady p95 at
 | `internal/history`, `internal/check` | Jepsen-style history recording and the checker |
 | `cmd/relay-chaos` | chaos orchestrator, workload, and fault schedule |
 | `cmd/relay-bench` | benchmarks (`compare`, `drive`, `plot`) |
+| `cmd/relay-dash` | live dashboard: Go server plus an embedded web UI (`web/`), no build step |
 | `deploy/` | compose files (Redis, Raft, chaos, bench, observability), Grafana and Prometheus config |
 | `bench/results/` | committed results JSON and charts |

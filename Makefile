@@ -17,7 +17,7 @@ export RELAY_GIT_REVISION := $(shell git rev-parse HEAD 2>/dev/null || echo unkn
 SWEEP_TAG = relay:sweep-$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 SWEEP_OUT = chaos-out/sweep-$(BACKEND)-$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
-.PHONY: all generate build test integration bench bench-relay image lint clean chaos chaos-sweep up down
+.PHONY: all generate build test integration bench bench-relay image lint clean chaos chaos-sweep up down dash
 
 all: build
 
@@ -45,6 +45,11 @@ up:
 ## down: stop the local cluster and delete its volumes
 down:
 	docker compose -f $(COMPOSE_FILE_$(BACKEND)) $(OBSERVABILITY) --profile extra down -v --remove-orphans
+
+## dash: live dashboard at http://127.0.0.1:8080; attaches to a running `make up`
+##       cluster, or launches one with settings chosen in the UI
+dash:
+	go run ./cmd/relay-dash
 
 ## image: build the relay container image used by compose
 image:
